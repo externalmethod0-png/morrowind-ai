@@ -1,0 +1,42 @@
+MIT License
+
+Copyright (c) 2026 dknos            (исходный проект dknos/morrowind-ai)
+Copyright (c) 2026 morrowind-ai contributors   (эта производная работа)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+────────────────────────────────────────────────────────────────────────────
+ЧТО ЭТА ЛИЦЕНЗИЯ ЗНАЧИТ ПО-РУССКИ
+
+Делайте с этим кодом что хотите: пользуйтесь, меняйте, раздавайте, вставляйте
+в свои проекты, в том числе платные. Единственное условие — сохраняйте этот
+файл с указанием авторов. Гарантий никаких: если что-то сломается, спросить
+будет не с кого.
+
+ЧТО НЕ ПОКРЫТО ЭТОЙ ЛИЦЕНЗИЕЙ И НЕ ВХОДИТ В РЕПОЗИТОРИЙ:
+
+  • Сама игра The Elder Scrolls III: Morrowind и всё её содержимое —
+    собственность Bethesda Softworks. Купите игру.
+  • Озвучка из игры и голосовые модели, обученные на ней. В репозиторий они
+    не входят: их собирают локально из вашей собственной копии игры
+    (см. docs/ГОЛОСА.md).
+  • Движок OpenMW — отдельный проект под GPLv3, ставится отдельно.
+  • Модели распознавания речи Vosk — Apache 2.0, скачиваются установщиком.
+  • Голоса Piper — MIT, скачиваются установщиком.
+  • Ответы облачных моделей — по условиям их поставщика.

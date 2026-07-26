@@ -1,0 +1,13 @@
+google-generativeai>=0.8.0
+chromadb>=0.5.0
+mss>=9.0.0
+Pillow>=10.0.0
+pytchat>=0.5.5
+obs-websocket-py>=1.0.0
+pyyaml>=6.0
+watchdog>=4.0.0
+aiofiles>=23.0.0
+# Provider SDKs — only the one(s) you use need to be installed
+openai>=1.0.0
+anthropic>=0.30.0
+aiohttp>=3.9.0

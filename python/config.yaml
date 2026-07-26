@@ -1,0 +1,212 @@
+# Morrowind AI — Isolated Configuration
+# Read API keys from ~/.nemoclaw_env — never hardcode secrets here
+
+# ---------------------------------------------------------------------------
+# Provider / model selection per agent
+# ---------------------------------------------------------------------------
+# Each agent reads its own block and calls providers.factory.get_provider().
+# To switch any agent's backend: change provider + model, then restart mw-bridge.
+#
+# Supported providers:
+#   gemini    — Google Gemini (GOOGLE_API_KEY in ~/.nemoclaw_env)
+#   openai    — OpenAI        (OPENAI_API_KEY in ~/.nemoclaw_env)
+#   anthropic — Claude        (ANTHROPIC_API_KEY in ~/.nemoclaw_env)
+#   ollama    — Local Ollama  (no auth, add base_url to override default)
+#   llamacpp  — llama.cpp     (no auth, add base_url to override default)
+#
+# NOTE: pixel_agent requires a vision-capable model.
+#       llamacpp does NOT support vision — it will warn and drop the image.
+# ---------------------------------------------------------------------------
+models:
+  # Разговоры с NPC идут на СВОЕЙ модели в LM Studio: без квот, без интернета,
+  # бесплатно. Модель выбрана замером (tests/bench_local_models.py, 3 захода по
+  # 7 сцен): saineko — 17/21 и единственная локальная, что реально исполняет
+  # приказ спутнику. Если сервер не поднят, ответы молча уходят в облако, и
+  # NPC не замолкают.
+  lore_agent:
+    provider: gemini
+    model: gemini-flash-lite-latest
+    temperature: 0.8
+  d2d_agent:          # radiant ambient NPC-to-NPC dialogue
+    provider: gemini
+    model: gemini-flash-lite-latest
+    temperature: 0.9
+  pixel_agent:        # needs vision support — do NOT use llamacpp here
+    provider: gemini
+    model: gemini-flash-lite-latest
+    temperature: 0.3
+  obs_director:
+    provider: gemini
+    model: gemini-flash-lite-latest
+    temperature: 0.2
+  # ── ЛОКАЛЬНАЯ МОДЕЛЬ вместо облака ────────────────────────────────────────
+  # Замени блок lore_agent на такой — и разговоры пойдут через LM Studio,
+  # без квот, без интернета и бесплатно. В самом LM Studio нужно нажать
+  # «Start Server» (вкладка Developer), модель выбирается там же.
+  #
+  # lore_agent:
+  #   provider: local
+  #   base_url: http://localhost:1234/v1   # LM Studio; Ollama — :11434/v1
+  #   model: t-lite-it-2.1                 # пусто = какая загружена в сервере
+  #   temperature: 0.8
+  #   timeout: 90
+  #   fallback:                            # если сервер не поднят — не молчим
+  #     provider: gemini
+  #     model: gemini-flash-lite-latest
+  #
+  # Замер трёх установленных моделей — tests/bench_local_models.py, семь сцен
+  # с заранее известным правильным поведением, настоящий промпт мода:
+  #   t-lite-it-2.1          5/7, ~9 с/реплика, ~490 т/с — ЛУЧШАЯ. Живой русский,
+  #                          держит контекст сцены (помнит, что убил сам),
+  #                          не сочиняет того, чего знать не может, формат тегов
+  #                          безупречен. Слабое место: сговорчивых действий не
+  #                          даёт — нанять спутника, велеть ждать, торговать.
+  #   gigachat3.1-10b-a1.8b  2/7, ~7.5 с — быстрее всех, но в половине сцен
+  #                          возвращает одни теги без реплики и мешает английский.
+  #   gemma-4-e4b-uncensored 0/7, 20–46 с — «думающая»: 876 токенов из 900 уходят
+  #                          в скрытые рассуждения, на ответ не остаётся ничего.
+  # Скорость на этой машине снята при свободной карте. Локальная модель делит
+  # видеокарту с озвучкой XTTS — с ней ставь tts.engine: morrowind или piper.
+  # Разбор ответа защитный: неверный тег превращается в «none», мод не ломается.
+  #   base_url: http://localhost:11434
+  #   temperature: 0.8
+  # Example: switch obs_director to llama.cpp
+  # obs_director:
+  #   provider: llamacpp
+  #   base_url: http://localhost:8080
+  #   temperature: 0.2
+
+# ---------------------------------------------------------------------------
+# Legacy Gemini section — kept for backwards compatibility with old code.
+# New agents use models: above instead.
+# ---------------------------------------------------------------------------
+gemini:
+  model: gemini-flash-lite-latest
+  lore_agent_temp: 0.8
+  pixel_agent_temp: 0.3
+  director_agent_temp: 0.2
+  max_retries: 3
+
+# Потолок длины ответа. Не средство укоротить реплику — для этого правила
+# краткости в промпте; здесь именно потолок, и он должен быть С ЗАПАСОМ. Если
+# обрезать по нему, ответ оборвётся на полуслове И ПОТЕРЯЕТ БЛОК ТЕГОВ, который
+# идёт после реплики, — движок не выполнит ни одного действия.
+max_output_tokens: 420
+
+campaign_id: "morrowind-default"
+
+# Radiant ambient dialogue settings (NPC-to-NPC D2D system).
+radiant:
+  enabled: true
+  # Lua-side cooldown (PAIR_COOLDOWN in npc_detector.lua) controls how often the
+  # same NPC pair can trigger; this is just the Python-side gate if needed.
+  min_interval_s: 60
+
+# Per-NPC disposition, mood residue, and life-facts layer.
+# Stored in chroma_dir/dispositions.json. When off, the lore_agent prompt is
+# unchanged from its pre-disposition shape — useful for isolating failures
+# while radiant D2D / ACTION handling are still being field-tested.
+features:
+  disposition: true
+
+ipc:
+  dir: /home/nemoclaw/morrowind-ai/ipc
+  events_dir: /home/nemoclaw/morrowind-ai/ipc/events
+  poll_interval_ms: 100
+
+memory:
+  chroma_dir: /home/nemoclaw/morrowind-ai/chroma
+  history_limit: 10
+
+obs:
+  host: localhost
+  port: 4455
+  password: ""  # set if OBS websocket has a password
+  enabled: false  # set to true when OBS is running
+
+stream:
+  enabled: false  # set true to activate YouTube live chat -> game events
+  youtube_video_id: ""  # set YouTube live video_id before enabling
+  chat_poll_interval: 1.0
+
+pixel:
+  enabled: false
+  capture_interval_sec: 3
+  window_title: OpenMW
+  resize_to: [1024, 768]
+
+logs:
+  dir: /home/nemoclaw/morrowind-ai/logs
+  level: INFO
+
+# Голоса NPC — стартуют вместе с мостом.
+#
+# Нагрузка разведена по трём устройствам:
+#   игра          -> видеоядро AMD (в параметрах Windows: Графика -> openmw.exe
+#                    -> «Конкретный GPU» -> Radeon; общий переключатель
+#                    «Энергосбережение» на OpenGL НЕ действовал),
+#   озвучка XTTS  -> ускоритель NVIDIA CMP 70HX, теперь он её единоличный,
+#   распознавание -> процессор.
+# Проверять раскладку: ПРОВЕРКА РАСКЛАДКИ.bat
+#
+# Замеры на этой машине, одна и та же реплика:
+#   piper     0.6-0.9 с, процессор. Дикция ЧЁТЧЕ ВСЕХ, но голоса не из игры.
+#   morrowind 0.1-0.2 с, процессор. Тембр родных актёров; дикция слабее —
+#             материала для дообучения мало (1823 клипа, ~99 минут), и
+#             увеличение шагов вчетверо разницы почти не дало.
+#   xtts      клонирует голос с родной озвучки НА ХОДУ. Качество выше всех
+#             остальных: распознаётся дословно. Держит ускоритель.
+#             Замер по длине реплики (карта свободна, латенты прогреты):
+#                56 знаков — 4.7 с      (столько и выдаёт игра: промпт
+#                86 знаков — 4.1 с       держит ответ в 30 слов)
+#               191 знак   — 11.2 с, двумя кусками: первый звучит с 5.0 с
+#             Прежние «56 секунд» и «17.4 с» устарели вдвойне: первое мерили,
+#             когда игра рендерилась на этой же карте, второе — на строке в
+#             219 знаков, каких промпт больше не порождает.
+#             На ПРОЦЕССОРЕ медленнее в 2-3 раза (8.6 / 12.5 / 22.4 с) и там
+#             же дерётся за ядра с распознаванием — проверено, не вариант.
+#             Паузу до первого звука закрывает ЗАРАНЕЕ нарисованная заминка
+#             тем же голосом (data/fillers_xtts, tools/build_fillers.py).
+#             ВАЖНО: xtts держит ускоритель, поэтому voice.compute_device
+#             обязан быть cpu — иначе распознавание даёт разброс 6-71 с.
+tts:
+  enabled: true
+  # Заминка перед ответом («Хм…», «Дай-ка подумать») — ВЫКЛЮЧЕНА решением
+  # игрока. Она затыкала паузу, когда цепочка занимала восемь секунд; сейчас
+  # от отпускания клавиши до звука проходит меньше трёх, и мычание стало
+  # лишним — оно только оттягивает настоящий ответ.
+  # Банк заготовок никуда не делся (data/fillers_xtts, 20 голосов × 8 фраз):
+  # поставь filler: true — и вернётся, пересобирать нечего.
+  filler: false
+  # ВЫБРАНО ИГРОКОМ НА СЛУХ в очной ставке семи вариантов (ГОЛОСА-СРАВНЕНИЕ на
+  # рабочем столе): дообученные голоса дают лучшую дикцию и самую живую
+  # интонацию. Замер разборчивости этого НЕ показал — все варианты упёрлись в
+  # 11-12 слов из 12, метрика мерит «можно ли разобрать», а не «приятно ли».
+  engine: morrowind   # morrowind | piper | xtts | silero | edge
+  # spatial — отдавать голос ДВИЖКУ игры: звук идёт из точки, где стоит NPC,
+  # слышно направление, его глушат стены, он замолкает вместе с паузой. Иначе
+  # реплику играем мимо игры и громкость подгоняем сами по расстоянию.
+  # ВНИМАНИЕ: режим требует, чтобы файлы-слоты появились ДО запуска игры (их
+  # делает мост при старте), и в самой игре ещё не проверен — включай, только
+  # если готов проверить и откатить.
+  spatial: false
+
+# Голосовой режим (клавиша V): микрофон -> whisper (Wisper venv) -> диалог
+voice:
+  enabled: true
+  device: fifine   # часть имени микрофона; пусто = устройство Windows по умолчанию
+  # Где считать распознавание — зависит от того, кто отвечает за NPC.
+  # Замеры на этой машине (одна и та же фраза, 5 прогонов):
+  #   NVIDIA свободна        — 2.2 с, стабильно;
+  #   NVIDIA занята (XTTS)   — от 6 до 71 секунды, разброс дикий;
+  #   процессор              — 3.2 с, на загрузку карты не реагирует вовсе.
+  # Отсюда две раскладки под этот ПК (переключаются в лаунчере):
+  #   облачный Gemini -> cuda  (ускоритель свободен, отдаём его распознаванию)
+  #   своя модель     -> cpu   (ускоритель целиком под неё)
+  # Отрисовка игры в обоих случаях на видеоядре AMD, синтез речи — на
+  # процессоре: дообученным голосам карта не нужна.
+  compute_device: cpu
+
+# Рассказчик (клавиша U): vision=true — делает кадр экрана и ОПИСЫВАЕТ РЕАЛЬНУЮ сцену
+narrator:
+  vision: true

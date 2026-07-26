@@ -1,0 +1,23 @@
+# morrowind-ai.omwscripts
+# OpenMW 0.49 script registration file for the Morrowind AI NPC mod.
+#
+# Scope notes:
+#   GLOBAL scripts have world.* access; Windows sandbox: io/os are nil.
+#   PLAYER scripts have UI, input, nearby.* access.
+#
+# Dialogue pipeline (print-IPC, Windows-compatible):
+#   PLAYER dialogue_ui.lua  -- H key, auto-greeting, chat input, NPC speech display
+#   GLOBAL ipc_client.lua   -- print('[MWAI_REQ]') requests; VFS polls response/npc_speech
+#   GLOBAL world_events.lua -- world actions (spawn/drop/message/npc-action)
+#   GLOBAL npc_detector.lua -- radiant D2D: scans proximate NPC pairs, fires npc_npc requests
+
+# All dialogue IPC lives in the PLAYER script (works during pause via onFrame).
+# npc_detector (GLOBAL) only emits radiant NPC-pair events; it is tamed:
+# player excluded, 90s global / 10min per-pair cooldowns, player-radius gate.
+#   GLOBAL: scripts/ipc_client.lua    (retired)
+#   GLOBAL: scripts/world_events.lua  (retired)
+# npc_detector retired: radiant pair detection moved into dialogue_ui.lua, the
+# PLAYER script, where nearby.castRay exists — so NPCs no longer "chat" through
+# walls and we only spend requests on scenes the player can actually witness.
+GLOBAL: scripts/disposition_service.lua
+PLAYER: scripts/dialogue_ui.lua

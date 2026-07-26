@@ -1,0 +1,28 @@
+# Окружения и модели — их ставит мастер установки, в репозиторий не кладём
+venv/
+xtts/
+piper_train_env/
+piper/
+data/vosk/
+data/tts/
+data/tts_*/
+data/piper_dataset/
+data/fillers_xtts/
+data/xtts_latents/
+data/chroma/
+kobold/
+
+# Личное: ключи, память конкретной игры, логи
+*.log
+data/*.json
+data/characters.json
+openmw-mod/ai_inbox/responses.ndjson
+openmw-mod/ai_inbox/bridge_ready.txt
+.nemoclaw_env
+
+# Мусор
+__pycache__/
+*.pyc
+*.tmp
+*.bak
+*.zip
