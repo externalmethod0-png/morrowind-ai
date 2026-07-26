@@ -26,3 +26,7 @@ __pycache__/
 *.tmp
 *.bak
 *.zip
+
+# Вендоренный разборщик Lua для тестов — ставится отдельно:
+#   venv\Scripts\python.exe -m pip install --target tests\_luatools luaparser
+tests/_luatools/
