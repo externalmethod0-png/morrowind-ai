@@ -3499,6 +3499,10 @@ function SC.ask(kind, order)
         req_id = 'scene-' .. SESSION_SALT .. '-' .. reqCounter,
         fit = kind or {}, order = order,
         cast = cast,
+        -- Что у игрока уже сделано и что ещё висит. Без этого режиссёр ставил
+        -- сцены про давно закрытые дела: Фаргот при игроке обвинял соседа в
+        -- краже кольца, которое сам же час назад получил обратно.
+        quests = buildQuestList(),
         location = (self_.object.cell and tostring(self_.object.cell.name or '')) or '',
         when = string.format('%02d:00', hour),
     })

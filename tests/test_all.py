@@ -324,6 +324,44 @@ def t_fate_roles_match_between_python_and_lua():
         assert role in in_service, f"{role}: переезд есть, а селить некуда"
 
 
+def t_scenes_know_what_is_already_done():
+    """Сцену нельзя ставить про дело, которое игрок уже закрыл.
+
+    Игрок вернул Фарготу кольцо — и тут же при нём разыгралась сцена, где
+    Фаргот обвиняет соседа в краже этого самого кольца. Режиссёр сцен не знал
+    о делах игрока ВООБЩЕ: слова «квест» в его промпте не было.
+    """
+    lua = (ROOT / "openmw-mod" / "scripts" / "dialogue_ui.lua").read_text(encoding="utf-8")
+    i = lua.index("type = 'scene',")
+    assert "quests = buildQuestList()" in lua[i:i + 700], \
+        "сцена уходит без списка дел игрока"
+
+    sa = (ROOT / "python" / "agents" / "scene_agent.py").read_text(encoding="utf-8")
+    assert 'req.get("quests")' in sa, "режиссёр не читает список дел"
+    assert "Сделанное — позади" in sa, "не запрещено ставить сцены про закрытое"
+
+
+def t_nobody_reveals_other_peoples_stashes():
+    """Чужой тайник вслух не называют.
+
+    В той же сцене прозвучало, что кольцо хранится «в пне за маяком» — а это
+    тайник самого Фаргота с его золотом. Модель знает лор и выдала игроку
+    находку, да ещё приписала тайник одного человека другому.
+    """
+    sa = (ROOT / "python" / "agents" / "scene_agent.py").read_text(encoding="utf-8")
+    assert "ЧУЖИХ ТАЙНИКОВ НЕ ВЫДАВАТЬ" in sa, "сцена может выдать тайник"
+    assert "не приписывай тайник одного человека другому" in sa, \
+        "тайник можно приписать не тому"
+
+    agent = (ROOT / "python" / "agents" / "lore_agent.py").read_text(encoding="utf-8")
+    i = agent.index("ЧУЖИЕ ТАЙНИКИ")
+    block = agent[i:i + 700]
+    assert "не приписываешь" in block, "в разговоре тайник всё ещё можно приписать чужому"
+    # Но свой тайник человек вправе доверить — это награда за доверие,
+    # а не утечка.
+    assert "СВОЙ тайник" in block, "у персонажа отняли право доверить своё"
+
+
 def t_call_for_guards_is_not_a_verdict():
     """Крик «стража!» вызывает стражника, а не выписывает штраф.
 
@@ -2359,6 +2397,8 @@ def main() -> int:
             t_companion_relationship_can_still_move,
             t_theft_accuses_once_per_incident,
             t_call_for_guards_is_not_a_verdict,
+            t_scenes_know_what_is_already_done,
+            t_nobody_reveals_other_peoples_stashes,
             t_guard_walks_over_and_stops_the_fight,
             t_npcs_do_not_talk_over_each_other,
             t_npc_asks_only_for_doable_things,
