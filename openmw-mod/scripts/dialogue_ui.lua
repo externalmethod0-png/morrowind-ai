@@ -42,6 +42,53 @@ local INTERFACE_MODE = (I.UI and I.UI.MODE and I.UI.MODE.Interface) or 'Interfac
 -- variables»), а с ним переставали работать H и V. Поэтому всё, что относится
 -- к сценам — числа, состояние и функции, — живёт в ОДНОЙ таблице. Объявлена
 -- рано, чтобы её видели и функции окна, и обработчик кадра.
+-- КТО НАЧАЛ ДРАКУ. Мод сам умеет натравить человека на игрока — дуэль чести,
+-- исполненная угроза, ACTION:attack. После этого тот же человек мог позвать
+-- стражу, и закон вешал НАПАДЕНИЕ на игрока, который всего лишь отбивался.
+--
+-- Всё «кто первым начал» держим в одной таблице: свободных переменных в
+-- главном блоке почти нет (потолок 200, и на нём Lua не грузит файл целиком).
+-- Объявлено здесь, а не рядом с применением, потому что зовётся раньше.
+local blame = { firstBlood = {}, WINDOW = 300 }
+
+function blame.mark(obj)
+    pcall(function()
+        local id = tostring(obj.id or obj.recordId or '')
+        if id ~= '' then blame.firstBlood[id] = core.getSimulationTime() end
+    end)
+end
+
+function blame.started(obj)
+    local yes = false
+    pcall(function()
+        local id = tostring(obj.id or obj.recordId or '')
+        local t = id ~= '' and blame.firstBlood[id] or nil
+        yes = t ~= nil and (core.getSimulationTime() - t) < blame.WINDOW
+    end)
+    return yes
+end
+
+function blame.isGuard(obj)
+    local yes = false
+    pcall(function()
+        local cls = tostring(types.NPC.record(obj).class or ''):lower()
+        yes = cls:find('guard') ~= nil or cls:find('ordinator') ~= nil
+    end)
+    return yes
+end
+
+-- РАЗБИРАТЕЛЬСТВО. Раньше «позвать стражу» означало «мгновенно повесить на
+-- игрока нападение»: закон срабатывал раньше, чем кто-либо разобрался, кто
+-- прав, и достаточно было пяти таких выкриков подряд, чтобы игрок сел.
+--
+-- Теперь это вызов, как в жизни: стражник ИДЁТ на место, при его появлении
+-- драка прекращается, и он разговаривает с участниками. Штраф — только по его
+-- решению. Он вправе решить, что виноваты оба, или что ему лень разбираться.
+blame.case = nil            -- {caller, callerName, guard, at, arrived}
+blame.CALL_RADIUS = 3000    -- дальше стражник просто не услышит крика
+blame.CLOSE = 400           -- на таком расстоянии он уже вникает
+blame.PATIENCE = 90         -- секунд на дорогу, потом дело затухает
+
 local SC = {
     RADIUS = 1200,     -- кого берём в состав
     CAST_MAX = 5,
@@ -1209,7 +1256,32 @@ end
 -- о которых он знать не может. Раньше в голову каждому встречному вываливался
 -- весь журнал целиком, и трактирщик рассуждал о поручениях Клинков.
 local function buildQuestList()
-    local mine, others = {}, 0
+    -- Внутренняя, а не отдельная сверху: в главном блоке скрипта осталось
+    -- меньше пяти свободных локальных переменных из двухсот, а на двухсотой
+    -- Lua не грузит файл целиком — молча умирают и клавиша H, и клавиша V.
+    --
+    -- Запись журнала на нужной ступени: это СОБСТВЕННЫЙ текст игры о том, что
+    -- произошло. Отдавать модели его надёжнее, чем идентификатор вроде
+    -- «ms_fargothring:100» — по нему она гадает, а по тексту знает.
+    local function journalTextAt(qid, stage, myName)
+        local text, mentions = '', false
+        pcall(function()
+            local rec = core.dialogue.journal.records[qid]
+            for _, info in ipairs(rec and rec.infos or {}) do
+                if info.questStage == stage and info.text then
+                    text = tostring(info.text)
+                    if myName ~= '' and #myName > 3
+                       and text:lower():find(myName, 1, true) then
+                        mentions = true
+                    end
+                    break
+                end
+            end
+        end)
+        return text, mentions
+    end
+
+    local mine, done, others = {}, {}, 0
     local myName = ''
     pcall(function()
         myName = lockedNpcObj and tostring(types.NPC.record(lockedNpcObj).name or ''):lower() or ''
@@ -1218,35 +1290,42 @@ local function buildQuestList()
         for qid, q in pairs(types.Player.quests(self_.object)) do
             local started, finished, stage = false, false, 0
             pcall(function() started = q.started; finished = q.finished; stage = q.stage end)
-            if started and not finished then
-                local involved = false
-                if myName ~= '' and #myName > 3 then
-                    pcall(function()
-                        local rec = core.dialogue.journal.records[qid]
-                        for _, info in ipairs(rec and rec.infos or {}) do
-                            if info.questStage == stage and info.text
-                               and tostring(info.text):lower():find(myName, 1, true) then
-                                involved = true
-                                break
-                            end
-                        end
-                    end)
-                end
-                if involved and #mine < 6 then
-                    mine[#mine + 1] = tostring(qid) .. ':' .. tostring(stage)
-                else
-                    others = others + 1
+            if started then
+                local text, involved = journalTextAt(qid, stage, myName)
+                if not involved then
+                    -- Незаконченные чужие дела только считаем; законченные чужие
+                    -- не считаем вовсе — они уже никого не занимают.
+                    if not finished then others = others + 1 end
+                elseif finished then
+                    -- ЗАКОНЧЕННОЕ ДЕЛО ЭТОГО ЖЕ ЧЕЛОВЕКА. Раньше такие
+                    -- выбрасывались целиком, и получалось дико: игрок вернул
+                    -- Фарготу его фамильное кольцо, а Фаргот об этом не знал —
+                    -- запись исчезала из списка ровно в миг, когда дело сделано.
+                    if #done < 4 then
+                        done[#done + 1] = text ~= '' and text:sub(1, 220)
+                            or (tostring(qid) .. ' — завершено')
+                    end
+                elseif #mine < 5 then
+                    mine[#mine + 1] = (text ~= '' and text:sub(1, 220))
+                        or (tostring(qid) .. ':' .. tostring(stage))
                 end
             end
         end
     end)
-    local s = table.concat(mine, ', ')
-    if others > 0 then
-        s = s .. (s ~= '' and ' | ' or '') ..
-            'кроме этого чужак занят ещё чем-то (' .. others ..
-            ' дел), но тебе о них знать неоткуда'
+
+    local bits = {}
+    if #done > 0 then
+        bits[#bits + 1] = 'ЧТО ЧУЖАК УЖЕ СДЕЛАЛ ПО ТВОИМ ДЕЛАМ (это позади, ты '
+            .. 'об этом знаешь и помнишь): ' .. table.concat(done, ' | ')
     end
-    return s
+    if #mine > 0 then
+        bits[#bits + 1] = 'ТВОИ НЕЗАКОНЧЕННЫЕ ДЕЛА С НИМ: ' .. table.concat(mine, ' | ')
+    end
+    if others > 0 then
+        bits[#bits + 1] = 'кроме этого чужак занят ещё чем-то (' .. others
+            .. ' дел), но тебе о них знать неоткуда'
+    end
+    return table.concat(bits, ' || ')
 end
 
 -- ── Canonical ESM dialogue grounding ─────────────────────────────────────────
@@ -1822,6 +1901,8 @@ local function startDuel(obj, name, stake)
     pcall(function()
         obj:sendEvent('StartAIPackage', { type = 'Combat', target = self_.object, cancelOther = true })
     end)
+    -- Дуэль начал он: звать потом стражу на игрока — уже не по чести.
+    blame.mark(obj)
     showMsg('ДУЭЛЬ ЧЕСТИ: ' .. name .. ', ставка ' .. stake ..
             ' зол. Бой до первой серьёзной крови.')
     pushHistory(duel.npc_id, 'npc',
@@ -1967,6 +2048,9 @@ local function execAction(action, target, actorObj, actorName, hostileTarget, co
         showMsg(who .. ' теперь следует за тобой.')
     elseif action == 'attack' then
         pcall(function() obj:sendEvent('StartAIPackage', { type = 'Combat', target = foe }) end)
+        -- Бросился на игрока — значит начал он. Позже это не даст ему заявить
+        -- на игрока за нападение.
+        if foe == self_.object then blame.mark(obj) end
         showMsg(who .. ' бросается в атаку!')
         if obj == companionObj and companionObj == lockedNpcObj then
             companionObj, companionCtx = nil, nil   -- companion turned on the player
@@ -2155,7 +2239,28 @@ local function execAction(action, target, actorObj, actorName, hostileTarget, co
         -- The NPC leaves this life for good: walks away, then vanishes forever.
         addRumor(who .. ' собрал(а) пожитки и навсегда покинул(а) эти края')
         showMsg(who .. ' отправляется в новую жизнь...')
-        core.sendGlobalEvent('MorrowindAiDepart', { npc = obj })
+        -- Куда именно уйти. Глобальный скрипт этого посчитать не может: карта
+        -- проходимости (nearby.*) есть только здесь, у игрока. Раньше он просто
+        -- отправлял человека по прямой на 4000 единиц прочь от игрока — и в
+        -- Сейда Нин «прочь» означало в море. Игрок видел, как женщина уходит
+        -- топиться в закат.
+        local dest = nil
+        pcall(function()
+            local away = obj.position - self_.object.position
+            away = (away:length() > 1) and away:normalize() or util.vector3(1, 1, 0)
+            -- Пробуем несколько направлений: прямо прочь, потом вбок. Берём
+            -- первую точку, до которой ПО СУШЕ можно дойти.
+            for _, turn in ipairs({ 0, 0.7, -0.7, 1.6, -1.6 }) do
+                local c, s = math.cos(turn), math.sin(turn)
+                local d = util.vector3(away.x * c - away.y * s,
+                                       away.x * s + away.y * c, 0):normalize()
+                local p = nearby.findRandomPointAroundCircle(
+                    obj.position + d * 3000, 1200,
+                    { includeFlags = nearby.NAVIGATOR_FLAGS.Walk })
+                if p then dest = p; break end
+            end
+        end)
+        core.sendGlobalEvent('MorrowindAiDepart', { npc = obj, dest = dest })
         if obj == companionObj then companionObj, companionCtx = nil, nil end
         closeWindow()   -- unpause so the departure actually plays out
     elseif action == 'threaten' then
@@ -2181,12 +2286,20 @@ local function execAction(action, target, actorObj, actorName, hostileTarget, co
             showMsg(who .. ' не шутит: ' .. tostring(what or 'нарушишь') .. ' — ударит.')
         end
     elseif action == 'callguards' then
-        -- Report a crime through the VANILLA justice system: the player gets a
-        -- bounty for assault, guards come to ARREST (pay fine / go to jail /
-        -- resist) — not a summary execution for spoken words.
-        core.sendGlobalEvent('MorrowindAiReportCrime', { victim = obj })
-        showMsg(who .. ' зовёт стражу — на тебя заявили за нападение!')
-        closeWindow()   -- unpause so justice actually arrives
+        -- РЕШЕНИЕ СТРАЖНИКА — единственный путь к штрафу.
+        -- Если кричит сам стражник, значит он уже разобрался на месте: вот
+        -- теперь закон работает.
+        if blame.isGuard(obj) then
+            core.sendGlobalEvent('MorrowindAiReportCrime', { victim = obj })
+            showMsg(who .. ' решает дело не в твою пользу: штраф за нападение.')
+            blame.case = nil
+            closeWindow()
+        else
+            -- ВЫЗОВ, а не приговор. Раньше крик обывателя мгновенно вешал на
+            -- игрока нападение — закон срабатывал раньше, чем кто-то разобрался.
+            blame.summon(obj, who)
+            closeWindow()   -- unpause so the guard can actually walk over
+        end
     elseif action == 'defend' then
         -- The NPC (usually a guard) goes after a third party who wronged the player.
         local offender = findNpcByName(target)
@@ -2203,6 +2316,83 @@ local function execAction(action, target, actorObj, actorName, hostileTarget, co
             showMsg(npcName() .. ' оглядывается, но не видит обидчика поблизости.')
         end
     end
+end
+
+-- Кричать «стража!» может кто угодно, а решать — только стражник. Ищем
+-- ближайшего и отправляем его сюда; всё остальное сделает blame.tick.
+function blame.summon(caller, callerName)
+    local best, bestD = nil, blame.CALL_RADIUS
+    pcall(function()
+        for _, act in ipairs(nearby.actors or {}) do
+            if act ~= self_.object and act.type == types.NPC
+               and not types.Actor.isDead(act) and blame.isGuard(act) then
+                local d = (act.position - self_.object.position):length()
+                if d < bestD then best, bestD = act, d end
+            end
+        end
+    end)
+    if not best then
+        showMsg((callerName or 'Кто-то') .. ' зовёт стражу, но поблизости никого нет.')
+        return
+    end
+    pcall(function()
+        best:sendEvent('StartAIPackage', {
+            type = 'Travel', destPosition = self_.object.position, cancelOther = true,
+        })
+    end)
+    blame.case = { caller = caller, callerName = callerName or '',
+                   guard = best, at = core.getSimulationTime(), arrived = false }
+    showMsg((callerName or 'Кто-то') .. ' зовёт стражу — сюда идут разбираться.')
+end
+
+-- Стражник в пути: ждём, пока подойдёт, и разнимаем драку.
+function blame.tick()
+    local c = blame.case
+    if not c then return end
+    local now = core.getSimulationTime()
+    local ok = false
+    pcall(function() ok = c.guard and c.guard:isValid() and not types.Actor.isDead(c.guard) end)
+    if not ok or (now - c.at) > blame.PATIENCE then
+        blame.case = nil
+        return
+    end
+    if c.arrived or isOpen then return end
+
+    local d = 1e9
+    pcall(function() d = (c.guard.position - self_.object.position):length() end)
+    if d > blame.CLOSE then return end
+    c.arrived = true
+
+    -- ДРАКА ОСТАНАВЛИВАЕТСЯ. Пока не разобрались — руки прочь: всех, кто
+    -- поблизости машет оружием, переводим в мирное поведение.
+    pcall(function()
+        for _, act in ipairs(nearby.actors or {}) do
+            if act ~= self_.object and act.type == types.NPC
+               and not types.Actor.isDead(act)
+               and (act.position - self_.object.position):length() < 900 then
+                act:sendEvent('StartAIPackage', { type = 'Wander', distance = 128, duration = 1 })
+            end
+        end
+    end)
+    showMsg('Стража: «А ну разошлись! Оружие убрали, оба.»')
+
+    -- И разговор — со стражником, с делом на руках.
+    lockedCtx    = buildNpcContext(c.guard)
+    lockedNpcObj = c.guard
+    lastReplyText = '(стражник подходит и требует объяснений...)'
+    lastSpeaker, lastEmotion, inputBuffer = '', '', ''
+    sendRequest({
+        type = 'lock_npc',
+        npc_id = lockedCtx.npc_id, npc_name = lockedCtx.npc_name, npc_race = lockedCtx.npc_race,
+        npc_class = lockedCtx.npc_class, npc_faction = lockedCtx.npc_faction,
+        location = lockedCtx.location, npc_is_male = lockedCtx.npc_is_male,
+    })
+    local starter = 'неизвестно'
+    if c.caller and blame.started(c.caller) then
+        starter = (c.callerName ~= '' and c.callerName or 'заявитель') .. ' напал(а) первым'
+    end
+    sendMessage('__inquiry__:' .. tostring(c.callerName or '') .. '|' .. starter)
+    if not isOpen then openWindow(false) end
 end
 
 local function applyReply(data)
@@ -2361,8 +2551,16 @@ local function applyReply(data)
     end
 
     -- Apply the LLM's disposition delta to the ENGINE scale (0-100): prices,
-    -- services and vanilla reactions follow. Companion lines don't shift it.
-    if not isCompanion then
+    -- services and vanilla reactions follow.
+    --
+    -- Спутника раньше исключали — боялись, что он болтает всю дорогу и на
+    -- одной болтовне выкрутит отношение до сотни. Вышло хуже: у спутника
+    -- отношение замирало НАВСЕГДА. Игрок заплатил Телери, помог ей, а она
+    -- продолжала хамить, потому что её число не могло сдвинуться ничем.
+    --
+    -- От накрутки защищает не запрет, а дневной предел в самом сервисе
+    -- (+12/-20 за игровой день) — он для этого и написан.
+    do
         local delta = tonumber(data.disp) or 0
         if delta ~= 0 and mainObj then
             core.sendGlobalEvent('MorrowindAiSetDisposition',
@@ -2629,6 +2827,7 @@ local function threatWatch()
                 pcall(function()
                     t.obj:sendEvent('StartAIPackage', { type = 'Combat', target = self_.object })
                 end)
+                blame.mark(t.obj)   -- напал первым — заявлять на игрока не сможет
                 showMsg((t.name or 'NPC') .. ' исполняет свою угрозу!')
                 pushHistory(id, 'npc', '(исполнил угрозу и напал, когда игрок нарушил условие)')
             end
@@ -2911,14 +3110,30 @@ end
 -- next to it and the OWNER is around — the owner confronts the player.
 -- (v1 limitation: loose items only, not containers.)
 
-local theftSnap      = {}
-local theftTimer     = 0
-local theftCooldown  = 0
+-- Состояние слежки за чужим добром — одной таблицей: свободных переменных в
+-- главном блоке почти нет, а на двухсотой Lua не грузит файл целиком.
+local theft = { snap = {}, timer = 0, cooldown = 0 }
 
 
 local function theftWatch(dt)
+    -- Сколько таких вещей у игрока прямо сейчас. Нужно, чтобы отличить кражу
+    -- от всего остального: раньше «пропала из виду» означало «украдена», и в
+    -- лавке под это попадала обычная покупка — в списке обвинений первой
+    -- строкой стояло «Золото».
+    --
+    -- Внутренняя, а не сверху: в главном блоке скрипта осталось меньше пяти
+    -- свободных локальных переменных из двухсот, а на двухсотой Lua не грузит
+    -- файл целиком.
+    local function playerCountOf(recId)
+        local n = 0
+        pcall(function()
+            n = types.Actor.inventory(self_.object):countOf(tostring(recId or '')) or 0
+        end)
+        return n
+    end
+
     if isOpen then return end   -- never steal the lock mid-conversation (audit)
-    if theftCooldown > 0 then theftCooldown = theftCooldown - dt end
+    if theft.cooldown > 0 then theft.cooldown = theft.cooldown - dt end
     local fresh = {}
     local ppos = self_.object.position
     pcall(function()
@@ -2932,7 +3147,10 @@ local function theftWatch(dt)
                         local rec = it.type and it.type.record and it.type.record(it)
                         nm = rec and tostring(rec.name or '') or ''
                     end)
-                    fresh[it.id] = { owner = tostring(ownerId), name = nm, pos = it.position }
+                    fresh[it.id] = { owner = tostring(ownerId), name = nm,
+                                     pos = it.position,
+                                     rec = tostring(it.recordId or ''),
+                                     had = playerCountOf(it.recordId) }
                 end
             end
         end
@@ -2946,19 +3164,43 @@ local function theftWatch(dt)
                         local rec = it.type and it.type.record and it.type.record(it)
                         nm = rec and tostring(rec.name or '') or ''
                     end)
-                    fresh[it.id] = { owner = tostring(ownerId), name = nm, pos = cont.position }
+                    fresh[it.id] = { owner = tostring(ownerId), name = nm,
+                                     pos = cont.position,
+                                     rec = tostring(it.recordId or ''),
+                                     had = playerCountOf(it.recordId) }
                 end
             end
         end
     end)
     -- Anything from the previous snapshot that disappeared?
-    if theftCooldown <= 0 then
-        for id, info in pairs(theftSnap) do
-            if not fresh[id] then
+    --
+    -- ОДНА пропажа — ОДНО обвинение, сколько бы вещей ни исчезло разом.
+    -- Раньше откат ставился внутри, а проверялся снаружи обоих циклов, и
+    -- `break` выходил только из перебора людей. Игрок зашёл в лавку Аррилла,
+    -- снимок разошёлся с полками — и мод обвинил его СЕМНАДЦАТЬ раз подряд,
+    -- отдельно за щит, за поножи, за каждую перчатку. Каждое обвинение — свой
+    -- запрос к модели, свой штраф к отношению и свой вызов стражи: торговец
+    -- озверел за секунды, а на игроке повисли штрафы 200 и следом 40.
+    if theft.cooldown <= 0 then
+        -- Собираем всё пропавшее у ОДНОГО хозяина, который это видел.
+        local culpritAct, stolen = nil, {}
+        for id, info in pairs(theft.snap) do
+            -- Вещь пропала из виду — этого МАЛО. Пропасть она может как
+            -- угодно: её унёс хозяин, переложил слуга, вы её честно купили.
+            -- Обвиняем только если она ОКАЗАЛАСЬ У ВАС: считаем такие же вещи
+            -- в вашем мешке и требуем, чтобы их стало больше, чем было.
+            --
+            -- Без этой проверки в лавке Аррилла под «кражу» попала покупка —
+            -- в списке обвинений первой строкой стояло «Золото».
+            local tookIt = false
+            pcall(function()
+                tookIt = (info.rec or '') ~= ''
+                    and playerCountOf(info.rec) > (info.had or 0)
+            end)
+            if not fresh[id] and tookIt then
                 local nearItem = false
                 pcall(function() nearItem = (info.pos - ppos):length() < 350 end)
                 if nearItem then
-                    -- Find the owner nearby.
                     for _, act in ipairs(nearby.actors or {}) do
                         local match = false
                         pcall(function()
@@ -2970,30 +3212,38 @@ local function theftWatch(dt)
                         -- The owner must actually SEE it happen — a thief with
                         -- a wall between them is a thief who got away with it.
                         if match and hasLineOfSight(act) then
-                            theftCooldown = 30
-                            local itemName = (info.name ~= '' and info.name) or 'вещь'
-                            addRumor('чужак прибрал чужое добро (' .. itemName .. ')')
-                            lockedCtx    = buildNpcContext(act)
-                            lockedNpcObj = act
-                            lastReplyText = '(' .. (lockedCtx.npc_name ~= '' and lockedCtx.npc_name or 'хозяин') .. ' заметил...)'
-                            lastSpeaker, lastEmotion, inputBuffer = '', '', ''
-                            sendRequest({
-                                type = 'lock_npc',
-                                npc_id = lockedCtx.npc_id, npc_name = lockedCtx.npc_name,
-                                npc_race = lockedCtx.npc_race, npc_class = lockedCtx.npc_class,
-                                npc_faction = lockedCtx.npc_faction, location = lockedCtx.location,
-                                npc_is_male = lockedCtx.npc_is_male,
-                            })
-                            sendMessage('__theft__:' .. itemName)
-                            if not isOpen then openWindow(false) end
+                            if culpritAct == nil then culpritAct = act end
+                            if act == culpritAct and #stolen < 3 then
+                                stolen[#stolen + 1] = (info.name ~= '' and info.name) or 'вещь'
+                            end
                             break
                         end
                     end
                 end
             end
         end
+
+        if culpritAct then
+            theft.cooldown = 30
+            local what = table.concat(stolen, ', ')
+            if what == '' then what = 'вещь' end
+            addRumor('чужак прибрал чужое добро (' .. what .. ')')
+            lockedCtx    = buildNpcContext(culpritAct)
+            lockedNpcObj = culpritAct
+            lastReplyText = '(' .. (lockedCtx.npc_name ~= '' and lockedCtx.npc_name or 'хозяин') .. ' заметил...)'
+            lastSpeaker, lastEmotion, inputBuffer = '', '', ''
+            sendRequest({
+                type = 'lock_npc',
+                npc_id = lockedCtx.npc_id, npc_name = lockedCtx.npc_name,
+                npc_race = lockedCtx.npc_race, npc_class = lockedCtx.npc_class,
+                npc_faction = lockedCtx.npc_faction, location = lockedCtx.location,
+                npc_is_male = lockedCtx.npc_is_male,
+            })
+            sendMessage('__theft__:' .. what)
+            if not isOpen then openWindow(false) end
+        end
     end
-    theftSnap = fresh
+    theft.snap = fresh
 end
 
 -- ── Combat surrender: badly wounded foes may stop fighting and parley ─────────
@@ -3510,9 +3760,11 @@ local function onFrame(dt)
     end
     threatTimer = threatTimer + dt
     if threatTimer >= 1.5 then threatTimer = 0; pcall(threatWatch) end
-    theftTimer = theftTimer + dt
-    if theftTimer >= 2.5 then
-        local step = theftTimer; theftTimer = 0
+    -- Вызванный стражник в пути: смотрим, дошёл ли, и разнимаем драку.
+    if blame.case then pcall(blame.tick) end
+    theft.timer = theft.timer + dt
+    if theft.timer >= 2.5 then
+        local step = theft.timer; theft.timer = 0
         pcall(function() theftWatch(step) end)
     end
     -- Ambient radiant lines: poll + drain one line at a time.

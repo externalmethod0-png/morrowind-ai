@@ -97,9 +97,26 @@ end
 
 -- Report the player's offense through the VANILLA crime system: bounty +
 -- guards arrive with the normal arrest dialogue (pay fine / jail / resist).
+-- Один донос за раз. Предохранитель, а не украшение: детектор кражи однажды
+-- обвинил игрока семнадцать раз подряд (по разу на каждую вещь на полке), и
+-- каждое обвинение вешало ОТДЕЛЬНОЕ нападение. Игрок сел с штрафом 200, вышел
+-- и тут же сел снова с 40 — доносы всё ещё шли.
+--
+-- Сам залп исправлен там, где он рождался, но закон не должен зависеть от того,
+-- что никто наверху не ошибётся ещё раз.
+local lastCrimeAt = -1e9
+local CRIME_GAP = 20   -- секунд симуляции между доносами
+
 local function onReportCrime(data)
     local player = world.players and world.players[1]
     if not player then return end
+    local now = core.getSimulationTime and core.getSimulationTime() or 0
+    if now - lastCrimeAt < CRIME_GAP then
+        print('[morrowind-ai][crime] донос отклонён: предыдущий был '
+              .. string.format('%.1f', now - lastCrimeAt) .. ' с назад')
+        return
+    end
+    lastCrimeAt = now
     pcall(function()
         I.Crimes.commitCrime(player, {
             type = types.Player.OFFENSE_TYPE.Assault,
@@ -135,7 +152,11 @@ local function onDepart(data)
             local d = npc.position - player.position
             if d:length() > 1 then dir = d:normalize() end
         end
-        local dest = npc.position + dir * 4000
+        -- Точку по ПРОХОДИМОЙ земле подбирает скрипт игрока: карта проходимости
+        -- (nearby.*) доступна только там. Прямая линия осталась запасным
+        -- вариантом — именно она уводила людей в море, когда «прочь от игрока»
+        -- означало в воду.
+        local dest = data.dest or (npc.position + dir * 4000)
         npc:sendEvent('StartAIPackage', {
             type = 'Travel', destPosition = dest, cancelOther = true,
         })

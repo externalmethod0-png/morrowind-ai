@@ -145,6 +145,28 @@ FATE:<none | worker | drunk | innkeep | beggar | guard | smuggler | ticket
       | actor | prophet | fisher | clerk | guard_ic
       | hoarder | devotee | lucky | sleuth | keeper>
 
+ЧТО ТЫ ВООБЩЕ МОЖЕШЬ ПОПРОСИТЬ У ИГРОКА. Проси только то, что он способен
+сделать руками в этой игре. Мир умеет ровно вот это:
+  - дать или взять деньги («принеси двенадцать септимов»);
+  - передать СУЩЕСТВУЮЩУЮ вещь — ту, что правда есть в Морровинде, и лучше
+    ту, что ты видишь у себя или рядом; выдуманных предметов не бывает;
+  - переложить содержимое одного ящика/сундука в другой (сами ящики
+    неподъёмны, а вот вынуть и переложить — можно);
+  - пойти с тобой, подождать на месте, дойти до места, переехать в город;
+  - позвать кого-то, передать кому-то слова, указать дорогу;
+  - тёмное: украсть названную вещь, подбросить её, подсыпать отраву.
+
+    ПЛОХО: «помоги перетаскать ящики» — ящики не переносятся, и поручение
+           повиснет навсегда: игрок не сможет его выполнить никак.
+    ХОРОШО: «вынь из того сундука мои инструменты и переложи в мой ящик».
+    ХОРОШО: «дай двенадцать септимов, я выкуплю брата» — деньги игрок отдаёт
+            по-настоящему.
+    ХОРОШО: «принеси мне бутылку суджаммы» — вещь в игре есть.
+
+Если хочется чего-то ещё — это остаётся РАЗГОВОРОМ, а не поручением: жалуйся,
+мечтай, ругай судьбу, но не проси игрока о невозможном и не жди от него
+отчёта. Невыполнимое поручение висит вечно и выглядит бредом.
+
 ACTION must be exactly one of: none, follow, flee, attack, trade, callguards, defend, threaten, leave, relocate, dismiss, absolve, poison, steal, plant, frame, abduct, unlock, wait_here, go_to
 Use 'none' unless the NPC would genuinely want to act based on context.
 TARGET names WHO or WHAT the action is aimed at, exactly as the player referred to
@@ -418,6 +440,14 @@ def house_rules() -> str:
 # Начало промпта, одинаковое для КАЖДОГО NPC и каждой реплики за всю игру.
 # Собирается один раз при загрузке модуля, чтобы строка была байт в байт той
 # же — иначе переиспользование кеша не сработает.
+def _as_int(v: Any) -> Optional[int]:
+    """Число из запроса, если оно там есть и это правда число."""
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
 _STATIC_PREFIX = "\n".join([
     "You are roleplaying as an NPC in The Elder Scrolls III: Morrowind.",
     "It is the Third Era, approximately 3E 427, in the province of Morrowind.",
@@ -456,6 +486,7 @@ def _build_system_prompt(
     last_mood: Optional[str] = None,
     life_facts: Optional[list[str]] = None,
     talkativeness: str = "normal",
+    disposition: Optional[int] = None,
 ) -> str:
     race_blurb = RACE_PERSONALITIES.get(
         npc_race,
@@ -494,12 +525,36 @@ def _build_system_prompt(
     if disposition_band:
         parts += ["", "RELATIONSHIP:", disposition_band]
 
-    if last_mood and last_mood != "neutral":
+    # Настроение прошлой встречи — но только если оно НЕ спорит с тем, как этот
+    # человек относится к игроку на самом деле.
+    #
+    # Настроение пишется из предыдущего ответа самой модели, и получалась петля:
+    # ответила холодно -> записалось «disgusted» -> в следующий раз читает «ты
+    # испытывал отвращение» -> отвечает ещё холоднее. Игрок вернул Фарготу
+    # фамильное кольцо, движок показывал отношение 90 из 100, а тот всё равно
+    # цедил сквозь зубы — потому что residue пересиливал число.
+    #
+    # Источник правды — движок. Он считает отношение по поступкам, а не по
+    # тому, каким тоном была прошлая реплика.
+    SOUR = {"angry", "disgusted", "fearful"}
+    contradicts = (
+        last_mood in SOUR and disposition is not None and disposition >= 61
+    ) or (
+        last_mood == "happy" and disposition is not None and disposition <= 20
+    )
+    if last_mood and last_mood != "neutral" and not contradicts:
         parts += [
             "",
             f"EMOTIONAL RESIDUE: At your last encounter you felt {last_mood} toward "
             "the player. A quiet echo of that still colours your tone, even if you "
             "try to hide it.",
+        ]
+    elif contradicts:
+        parts += [
+            "",
+            "EMOTIONAL RESIDUE: none worth mentioning. Whatever the last exchange "
+            "sounded like, your actual standing with this person says otherwise — "
+            "go by the standing, not by the echo.",
         ]
 
     # Нелепые судьбы открывает ручка «нелепость»: без этого они выпадали бы и
@@ -869,6 +924,9 @@ class LoreAgent:
             last_mood=last_mood,
             life_facts=life_facts,
             talkativeness=str(request.get("talkativeness") or "normal"),
+            # Отношение из движка — чтобы прошлое настроение не спорило с тем,
+            # как этот человек относится к игроку на самом деле.
+            disposition=_as_int(request.get("npc_disposition")),
         )
 
         # Build the user turn, prepending memory context if available
@@ -880,6 +938,48 @@ class LoreAgent:
                 "ТВОЙ ВРОЖДЁННЫЙ ХАРАКТЕР (неизменен всю игру — это ты и есть, "
                 "в любой день и при любой встрече; отыгрывай ПОСЛЕДОВАТЕЛЬНО, "
                 "особенно отношение к деньгам):\n" + baked
+            )
+
+        # Стражник пришёл на вызов. До этого «позвать стражу» означало
+        # мгновенный штраф игроку — закон срабатывал раньше, чем кто-либо
+        # разобрался, кто прав, и пяти выкриков подряд хватало, чтобы сесть.
+        inquiry = str(request.get("inquiry") or "").strip()
+        if inquiry:
+            caller, _, starter = inquiry.partition("|")
+            user_parts.append(
+                "ТЫ СТРАЖНИК И ПРИШЁЛ НА ВЫЗОВ. Драку ты уже разнял, оружие "
+                "велел убрать. Теперь разбираешься.\n"
+                f"Кто звал: {caller or 'неизвестно'}.\n"
+                f"Кто начал: {starter or 'неизвестно'}.\n"
+                "\n"
+                "Ты НЕ ЗНАЕШЬ, кто прав, пока не спросишь. Начни с вопроса — "
+                "к игроку, к заявителю, к тем, кто рядом. Никого не бей и "
+                "никого не штрафуй, пока не разобрался: закон здесь ты, а не "
+                "чужой крик.\n"
+                "\n"
+                "Когда решишь:\n"
+                "- виноват игрок — ACTION:callguards (это твой приговор: штраф "
+                "и под стражу);\n"
+                "- виноват заявитель или оба хороши — ACTION:none, и скажи это "
+                "вслух своими словами;\n"
+                "- разбираться неохота — тоже ACTION:none: «разошлись оба, пока "
+                "я добрый», и дело с концом.\n"
+                "\n"
+                "Отыгрывай СЕБЯ, а не устав: усталому стражнику под конец смены "
+                "лень возиться, дотошный будет допрашивать до мелочей, а "
+                "продажный намекнёт, что дело можно уладить и без бумаг."
+            )
+
+        # Спутник обязан помнить, что он спутник. Без этой строки NPC шёл за
+        # игроком по пятам и в том же разговоре отрицал сам факт, заявляя, что
+        # это игрок за ним увязался.
+        if request.get("is_companion"):
+            user_parts.append(
+                "ТЫ ПУТЕШЕСТВУЕШЬ С ЭТИМ ЧЕЛОВЕКОМ. Ты сам согласился идти "
+                "следом и идёшь за ним прямо сейчас — это факт, а не его "
+                "выдумка. Не отрицай его, не переворачивай («это ты за мной "
+                "увязался») и не делай вид, что вы встретились случайно. "
+                "Захотел уйти — скажи об этом прямо, словами."
             )
 
         npc_disposition = request.get("npc_disposition")
@@ -980,13 +1080,20 @@ class LoreAgent:
 
         if active_quests:
             user_parts.append(
-                "ERRANDS OF THE PLAYER THAT YOU COULD KNOW OF (canonical Morrowind "
-                "quest ids with journal stage — these are ones YOU are named in, so "
-                "speak of them as your own business; use your lore knowledge to give "
-                "concrete, correct directions if asked. Anything marked as unknown to "
-                "you must stay unknown: do not reveal errands you have no way of "
-                "having heard about, and never dump the list unprompted):\n"
-                + active_quests
+                "ДЕЛА, О КОТОРЫХ ТЫ МОЖЕШЬ ЗНАТЬ — это записи журнала игры "
+                "своими словами, ты назван в них поимённо, поэтому говори о них "
+                "как о своих собственных делах:\n"
+                + active_quests + "\n"
+                # Про сделанное приходилось напоминать отдельно: раньше сюда
+                # попадали только НЕЗАКОНЧЕННЫЕ дела, и человек не помнил
+                # услуги, которую ему оказали час назад.
+                "Всё, что помечено как СДЕЛАННОЕ, — уже случилось на самом деле. "
+                "Это твой долг перед этим человеком, а не слухи и не его "
+                "хвастовство: не переспрашивай, не сомневайся вслух и не проси "
+                "сделать это ещё раз. Если он о таком заговорит — ты помнишь и "
+                "отвечаешь как человек, которому помогли.\n"
+                "Чего в списке нет — того ты не знаешь: не выдавай чужих "
+                "поручений и никогда не перечисляй список без спросу."
             )
 
         deal_note = (request.get("deal_note") or "").strip()

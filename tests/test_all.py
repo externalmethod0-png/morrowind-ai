@@ -241,8 +241,8 @@ def t_world_dials_reach_both_sides():
     wt.ensure_file()
     assert wt.TUNING_FILE.exists(), "файл настроек не создаётся"
     vals = wt.read()
-    assert vals["опасность"] == 30 and vals["нелепость"] == 30, \
-        f"по умолчанию обе ручки должны стоять на 30, а стоят {vals}"
+    assert vals["опасность"] == 10 and vals["нелепость"] == 10, \
+        f"по умолчанию обе ручки должны стоять на 10, а стоят {vals}"
 
     sizes = set()
     real = wt.TUNING_FILE.read_text(encoding="utf-8")
@@ -322,6 +322,309 @@ def t_fate_roles_match_between_python_and_lua():
     stay = {"hoarder", "devotee", "lucky", "sleuth", "keeper"}
     for role in in_lua - stay:
         assert role in in_service, f"{role}: переезд есть, а селить некуда"
+
+
+def t_call_for_guards_is_not_a_verdict():
+    """Крик «стража!» вызывает стражника, а не выписывает штраф.
+
+    Раньше любой обыватель мог мгновенно повесить на игрока НАПАДЕНИЕ: закон
+    срабатывал раньше, чем кто-либо разобрался, кто прав. Пяти таких выкриков
+    подряд хватило, чтобы игрока посадили с штрафом 200, а на выходе — ещё раз
+    с 40.
+
+    Теперь штраф выписывает только сам стражник и только после разбора.
+    """
+    lua = (ROOT / "openmw-mod" / "scripts" / "dialogue_ui.lua").read_text(encoding="utf-8")
+    i = lua.index("elseif action == 'callguards' then")
+    block = lua[i:i + 1200]
+
+    assert "blame.isGuard(obj)" in block, "решение может принять кто угодно"
+    assert "blame.summon" in block, "обыватель больше не вызывает стражника"
+    # Донос — ровно в ветке стражника, и больше нигде в этом блоке.
+    assert block.count("MorrowindAiReportCrime") == 1, \
+        "штраф выписывается не только по решению стражника"
+    # Донос стоит в ветке стражника — то есть ДО «else», который отделяет
+    # обывателя. Ищем именно разделитель ветвей, а не слово «else» в «elseif».
+    sep = block.index("\n        else\n")
+    assert "MorrowindAiReportCrime" in block[:sep], \
+        "стражник потерял право решить дело"
+    assert "MorrowindAiReportCrime" not in block[sep:], \
+        "обыватель снова штрафует игрока сам"
+
+
+def t_guard_walks_over_and_stops_the_fight():
+    """Стражник идёт на место, драка при нём прекращается, и он спрашивает."""
+    lua = (ROOT / "openmw-mod" / "scripts" / "dialogue_ui.lua").read_text(encoding="utf-8")
+
+    assert "function blame.summon" in lua, "нет вызова стражника"
+    assert "function blame.tick" in lua, "никто не следит, дошёл ли он"
+    assert "if blame.case then pcall(blame.tick) end" in lua, \
+        "слежение не подключено к кадру"
+
+    tick = lua[lua.index("function blame.tick"):]
+    tick = tick[:tick.index("\nlocal function applyReply")]
+    assert "StartAIPackage" in tick and "Wander" in tick, \
+        "драка не прекращается при подходе стражника"
+    assert "__inquiry__:" in tick, "стражник приходит без дела на руках"
+    assert "PATIENCE" in lua, "дело не затухает, если стражник не дошёл"
+
+    # Дело доезжает до промпта и там разбирается.
+    bridge = (ROOT / "python" / "openmw_log_bridge.py").read_text(encoding="utf-8")
+    assert "__inquiry__:" in bridge and '"inquiry":' in bridge, \
+        "дело не доходит до модели"
+    agent = (ROOT / "python" / "agents" / "lore_agent.py").read_text(encoding="utf-8")
+    assert "ТЫ СТРАЖНИК И ПРИШЁЛ НА ВЫЗОВ" in agent, "стражнику не объяснили, зачем он здесь"
+    assert "пока не разобрался" in agent, "нет запрета карать до разбора"
+    assert "лень возиться" in agent, "у стражника отняли право махнуть рукой"
+
+
+def t_npcs_do_not_talk_over_each_other():
+    """Второй начинает говорить только когда отзвучал первый.
+
+    Озвучка и раньше шла по очереди, но МИР порождал реплики не считаясь с
+    этим: свидетель влезал поверх собеседника, спутник поверх свидетеля. При
+    переполнении очереди чья-то реплика пропадала совсем.
+    """
+    q = (ROOT / "python" / "tts_queue.py").read_text(encoding="utf-8")
+    assert "def busy(" in q and "def wait_quiet(" in q, "нет признака «сейчас говорят»"
+    assert "_speaking" in q, "не отмечается сама говорящая реплика"
+
+    bridge = (ROOT / "python" / "openmw_log_bridge.py").read_text(encoding="utf-8")
+    assert "async def _await_quiet" in bridge, "мост не умеет ждать тишины"
+    # Ждут именно те, кто влезает со стороны.
+    assert bridge.count("await self._await_quiet()") >= 2, \
+        "свидетель или спутник по-прежнему говорят поверх"
+
+
+def t_npc_asks_only_for_doable_things():
+    """Поручение должно быть выполнимым руками игрока.
+
+    Телери попросила «помочь перетаскать ящики» — ящики в игре не переносятся,
+    и поручение повисло навсегда. Деньги, существующие вещи, содержимое
+    сундуков — можно; выдуманное — нельзя.
+    """
+    agent = (ROOT / "python" / "agents" / "lore_agent.py").read_text(encoding="utf-8")
+    i = agent.index("ЧТО ТЫ ВООБЩЕ МОЖЕШЬ ПОПРОСИТЬ У ИГРОКА")
+    block = agent[i:i + 1800]
+
+    assert "перетаскать ящики" in block, "нет примера невыполнимого поручения"
+    assert "переложить содержимое" in block, "не объяснено, что с ящиками можно"
+    assert "СУЩЕСТВУЮЩУЮ вещь" in block, "разрешены выдуманные предметы"
+    assert "остаётся РАЗГОВОРОМ" in block, \
+        "нет выхода: о невозможном можно говорить, но не поручать"
+
+
+def t_theft_accuses_once_per_incident():
+    """Одна пропажа — одно обвинение, сколько бы вещей ни исчезло разом.
+
+    Игрок зашёл в лавку Аррилла, снимок вещей разошёлся с полками — и мод
+    обвинил его СЕМНАДЦАТЬ раз подряд, отдельно за щит, за поножи, за каждую
+    перчатку. Откат ставился внутри цикла, а проверялся снаружи обоих, и
+    `break` выходил только из перебора людей.
+
+    Каждое обвинение стоило запроса к модели, штрафа к отношению и вызова
+    стражи: торговец озверел за секунды и напал, а на игроке повисли штрафы
+    200 и следом 40.
+    """
+    lua = (ROOT / "openmw-mod" / "scripts" / "dialogue_ui.lua").read_text(encoding="utf-8")
+
+    # Обвинение шлётся ровно в одном месте на весь файл и ровно один раз.
+    assert lua.count("sendMessage('__theft__:") == 1, \
+        "обвинение в краже шлётся из нескольких мест"
+    assert lua.count("theft.cooldown = 30") == 1, "откат ставится в нескольких местах"
+
+    # Сбор пропаж отделён от обвинения: сначала копим, потом обвиняем ОДИН раз,
+    # ПОСЛЕ перебора, а не внутри него.
+    loop = lua.index("for id, info in pairs(theft.snap)")
+    accuse = lua.index("if culpritAct then")
+    send = lua.index("sendMessage('__theft__:")
+    assert loop < accuse < send, "обвинение осталось внутри перебора вещей"
+
+    # И обвиняем, только если вещь ДЕЙСТВИТЕЛЬНО оказалась у игрока.
+    assert "playerCountOf" in lua, "нет проверки, что вещь попала в мешок игрока"
+    assert "tookIt" in lua, "пропажа из виду снова считается кражей"
+
+
+def t_law_cannot_be_spammed():
+    """Закон не должен вешать пачку штрафов за секунды.
+
+    Предохранитель на случай, если наверху снова что-нибудь зациклится:
+    пять доносов за полминуты дали игроку несколько обвинений в нападении
+    подряд — он сел с 200, вышел и тут же сел снова с 40.
+    """
+    svc = (ROOT / "openmw-mod" / "scripts" / "disposition_service.lua").read_text(encoding="utf-8")
+    i = svc.index("local function onReportCrime")
+    block = svc[max(0, i - 700):i + 900]
+
+    assert "CRIME_GAP" in block, "нет ограничения на частоту доносов"
+    assert "lastCrimeAt" in block, "не запоминается время прошлого доноса"
+    # Отклонение должно быть видно в логе — молчаливое проглатывание уже
+    # однажды стоило нам суток поисков.
+    assert "донос отклонён" in block, "отклонённый донос нигде не виден"
+
+
+def t_companion_relationship_can_still_move():
+    """Спутнику отношение размораживается.
+
+    Игрок заплатил Телери 12 золотых и помог ей, а она продолжала хамить: как
+    только человек становился спутником, строка `if not isCompanion` отрезала
+    ему любые изменения отношения — навсегда. От накрутки болтовнёй защищает
+    дневной предел в сервисе, а не запрет.
+    """
+    lua = (ROOT / "openmw-mod" / "scripts" / "dialogue_ui.lua").read_text(encoding="utf-8")
+    i = lua.index("Apply the LLM's disposition delta")
+    block = lua[i:i + 1200]
+    assert "if not isCompanion then" not in block, \
+        "спутнику снова заморозили отношение"
+    assert "MorrowindAiSetDisposition" in block, "изменение больше не доходит до игры"
+
+    svc = (ROOT / "openmw-mod" / "scripts" / "disposition_service.lua").read_text(encoding="utf-8")
+    assert "DISP_DAILY_UP" in svc, "исчез дневной предел — теперь накрутят болтовнёй"
+
+
+def t_companion_knows_they_are_following():
+    """Спутник не должен отрицать, что идёт за игроком.
+
+    Флаг is_companion приходил из игры, но мост клал его только в генератор
+    предыстории — в промпт он не попадал вовсе. Телери шла следом и в том же
+    разговоре уверяла, что это игрок за ней увязался.
+    """
+    bridge = (ROOT / "python" / "openmw_log_bridge.py").read_text(encoding="utf-8")
+    assert '"is_companion":' in bridge, "флаг не кладётся в запрос к модели"
+
+    agent = (ROOT / "python" / "agents" / "lore_agent.py").read_text(encoding="utf-8")
+    assert 'request.get("is_companion")' in agent, "промпт не смотрит на флаг"
+    assert "ПУТЕШЕСТВУЕШЬ С ЭТИМ ЧЕЛОВЕКОМ" in agent, "спутнику не сказано, что он спутник"
+    assert "увязался" in agent, "нет запрета переворачивать: «это ты за мной пошёл»"
+
+
+def t_departing_npc_walks_on_land():
+    """Уходящий навсегда должен уходить по земле, а не в море.
+
+    Прогнанная Телери получала цель «4000 единиц прочь от игрока» по прямой.
+    В Сейда Нин прочь от игрока — это вода, и игрок смотрел, как она уплывает
+    в закат. Точку по проходимой земле умеет считать только скрипт игрока:
+    карта проходимости живёт в nearby.*, а её там нет.
+    """
+    lua = (ROOT / "openmw-mod" / "scripts" / "dialogue_ui.lua").read_text(encoding="utf-8")
+    i = lua.index("MorrowindAiDepart")
+    block = lua[max(0, i - 1400):i + 200]
+    assert "findRandomPointAroundCircle" in block, "точка ухода снова берётся по прямой"
+    assert "NAVIGATOR_FLAGS.Walk" in block, "точка не проверяется на проходимость пешком"
+    assert "dest = dest" in block, "посчитанная точка не передаётся в игру"
+
+    svc = (ROOT / "openmw-mod" / "scripts" / "disposition_service.lua").read_text(encoding="utf-8")
+    j = svc.index("local function onDepart")
+    assert "data.dest or" in svc[j:j + 900], \
+        "сервис игнорирует присланную точку"
+
+
+def t_finished_quests_are_not_forgotten():
+    """Услугу, которую игрок оказал, NPC обязан помнить.
+
+    Игрок вернул Фарготу фамильное кольцо — личный квест выполнен, отношение
+    в движке 90 из 100. А Фаргот об этом не знал: список дел строился с
+    условием `started and not finished`, и запись исчезала из него ровно в
+    тот миг, когда дело было сделано.
+    """
+    lua = (ROOT / "openmw-mod" / "scripts" / "dialogue_ui.lua").read_text(encoding="utf-8")
+    body = lua[lua.index("local function buildQuestList"):]
+    body = body[:body.index("\n-- ")]
+
+    assert "started and not finished" not in body, \
+        "законченные дела снова выбрасываются целиком"
+    assert "elseif finished then" in body, \
+        "нет ветки для законченного дела этого же NPC"
+    assert "СДЕЛАЛ" in body, "сделанное не помечено как сделанное"
+
+    # И это должно доехать до промпта с прямым запретом переспрашивать.
+    agent = (ROOT / "python" / "agents" / "lore_agent.py").read_text(encoding="utf-8")
+    assert "СДЕЛАННОЕ" in agent, "промпт не отличает сделанное от текущего"
+    assert "не проси" in agent, "нет запрета просить сделать то же самое ещё раз"
+
+
+def t_mood_does_not_outrank_the_engine():
+    """Настроение прошлой встречи не должно спорить с отношением из движка.
+
+    Настроение пишется из ПРЕДЫДУЩЕГО ответа самой модели, и выходила петля:
+    ответила холодно -> записалось «disgusted» -> в следующий раз читает «ты
+    испытывал отвращение» -> отвечает ещё холоднее. У Фаргота при отношении 90
+    в запросе стояло npc_last_mood=disgusted, и осадок пересиливал число.
+    """
+    from agents import lore_agent as la
+
+    def build(mood, disp):
+        return la._build_system_prompt(
+            npc_name="Фаргот", npc_race="Wood Elf", npc_class="Commoner",
+            npc_faction="", location="Сейда Нин",
+            last_mood=mood, disposition=disp,
+        )
+
+    # Тёплое отношение — кислый осадок молчит.
+    for sour in ("disgusted", "angry", "fearful"):
+        out = build(sour, 90)
+        assert "EMOTIONAL RESIDUE: none" in out, f"{sour} при 90 всё ещё давит"
+        assert f"you felt {sour}" not in out, f"{sour} при 90 попал в промпт"
+
+    # Ненависть — радость прошлой встречи тоже неуместна.
+    assert "EMOTIONAL RESIDUE: none" in build("happy", 10), \
+        "радость уцелела при отношении 10"
+
+    # А когда одно другому не противоречит — осадок на месте, он полезен.
+    assert "you felt disgusted" in build("disgusted", 15), \
+        "потеряли осадок там, где он верен"
+    assert "you felt happy" in build("happy", 85), \
+        "потеряли тёплый осадок при тёплом отношении"
+
+    # Без числа из движка ничего не выдумываем.
+    assert "you felt disgusted" in build("disgusted", None), \
+        "без отношения осадок должен оставаться как есть"
+
+
+def t_voice_pitch_matches_the_race():
+    """Голос NPC должен попадать в высоту своей расы.
+
+    Игрок услышал, что у Фаргота-босмера низкий голос, — и оказался прав.
+    Замер родной озвучки: данмер-мужчина 80 Гц, босмер-мужчина 171, вдвое
+    выше. А босмеров отправляли в пул данмеров, и Фаргот получал 80 вместо
+    171 — промах больше чем в два раза.
+    """
+    from tts_morrowind import POOL_HZ, RACE_TO_POOL
+    from tts_queue import RACE_HZ, _RACE_ALIAS, pitch_for, race_pitch
+
+    worst = 0.0
+    for (race, male), want in RACE_HZ.items():
+        pool = RACE_TO_POOL.get(race, "d") + ("m" if male else "f")
+        base = POOL_HZ.get(pool)
+        assert base, f"{race}: пул {pool} без замеренной высоты"
+        # Берём самую неудачную личную высоту — даже она не должна уводить
+        # голос из своей расы.
+        for nid in ("a", "b", "c", "d", "e", "f", "g", "h"):
+            got = base * pitch_for(nid) * race_pitch(race, male, base)
+            worst = max(worst, abs(got - want) / want)
+    assert worst < 0.20, f"голос уезжает от своей расы на {worst * 100:.0f}%"
+
+    # И раса обязана влиять: без поправки босмер звучал бы как данмер.
+    assert race_pitch("wood elf", True, 79.0) > 1.25, \
+        "босмеру не поднимают голос"
+    # Данмерский пул и обучен на данмерах — его трогать почти не нужно.
+    assert abs(race_pitch("dark elf", True, 79.0) - 1.0) < 0.05, \
+        "данмеру высоту крутить незачем"
+    assert race_pitch("неизвестная раса", True, 100.0) == 1.0, \
+        "про незнакомую расу лучше не гадать"
+
+    # У piper базовые голоса стоят оба около 177 Гц, поэтому до данмерских
+    # 80 он дотянуться не может — упирается в предел разборчивости 0.70.
+    # Требуем не точности, а того, чтобы стало ЛУЧШЕ, чем без поправки.
+    from tts_piper import PIPER_HZ
+    for (race, male), want in RACE_HZ.items():
+        base = PIPER_HZ[male]
+        after = base * race_pitch(race, male, base)
+        assert abs(after - want) <= abs(base - want) + 1e-6, (
+            f"{race}: поправка увела дальше от цели "
+            f"({after:.0f} против {base:.0f}, надо {want})")
+    assert race_pitch("dark elf", True, 178.0) == 0.70, \
+        "данмера не опустили до предела разборчивости"
 
 
 def t_no_npc_is_frozen_for_days():
@@ -1745,13 +2048,13 @@ def t_npc_does_not_know_everything():
         "посторонним всё ещё называется точная сумма"
 
     # квесты: только те, где NPC назван по имени
-    quests = lua.split("local function buildQuestList")[1][:1600]
+    quests = lua.split("local function buildQuestList")[1][:3400]
     assert "journal.records" in quests and "myName" in quests, \
         "квесты не фильтруются по участию NPC"
     assert "знать неоткуда" in quests, "прочие дела не помечены как неизвестные"
 
     agent = (ROOT / "python" / "agents" / "lore_agent.py").read_text(encoding="utf-8")
-    assert "must stay unknown" in agent, "модель не обязана хранить неведение"
+    assert "того ты не знаешь" in agent, "модель не обязана хранить неведение"
 
 
 def t_memory_keeps_facts_and_drops_chatter():
@@ -2051,6 +2354,18 @@ def main() -> int:
             t_parse_survives_local_model_quirks, t_reply_trimmed_to_fit_the_window,
             t_parse_drops_stage_directions, t_scene_actions_never_hit_the_player,
             t_no_npc_is_frozen_for_days, t_fate_roles_match_between_python_and_lua,
+            t_voice_pitch_matches_the_race,
+            t_finished_quests_are_not_forgotten,
+            t_companion_relationship_can_still_move,
+            t_theft_accuses_once_per_incident,
+            t_call_for_guards_is_not_a_verdict,
+            t_guard_walks_over_and_stops_the_fight,
+            t_npcs_do_not_talk_over_each_other,
+            t_npc_asks_only_for_doable_things,
+            t_law_cannot_be_spammed,
+            t_companion_knows_they_are_following,
+            t_departing_npc_walks_on_land,
+            t_mood_does_not_outrank_the_engine,
             t_world_dials_reach_both_sides, t_dials_change_what_happens,
             t_filler_bank_speaks_in_the_npcs_own_voice, t_gpu_layout_accounts_for_xtts,
             t_filler_starts_before_transcription,

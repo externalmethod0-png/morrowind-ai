@@ -983,6 +983,8 @@ class OpenMWLogBridge:
                 "location": location,
                 "timestamp": _now_iso(),
             }
+            # Спутник влезает в разговор только когда предыдущий договорил.
+            await self._await_quiet()
             publish_reply(reply)
             tts = getattr(self, "tts", None)
             if tts is not None:
@@ -1047,6 +1049,10 @@ class OpenMWLogBridge:
                 "disp": 0, "gold": 0, "item": "none", "rumor": "", "life_facts": [],
                 "location": location, "timestamp": _now_iso(),
             }
+            # Свидетель вступает ТОЛЬКО после того, как отзвучал предыдущий.
+            # Раньше он влезал поверх и двое говорили разом, а при переполнении
+            # очереди чья-то реплика просто пропадала.
+            await self._await_quiet()
             publish_reply(reply)
             tts = getattr(self, "tts", None)
             if tts is not None:
@@ -1056,6 +1062,23 @@ class OpenMWLogBridge:
             logger.info("bystander '%s' stepped in (action=%s)", lname, reply["action"])
         except Exception as exc:  # noqa: BLE001
             logger.error("bystander react failed: %s", exc, exc_info=True)
+
+    async def _await_quiet(self, timeout: float = 12.0) -> None:
+        """Ждём, пока договорит тот, кто говорит сейчас.
+
+        Реплики озвучиваются по очереди, но МИР их порождал не считаясь с этим:
+        свидетель влезал поверх собеседника, спутник поверх свидетеля. В звуке
+        они выстраивались друг за другом, а в разговоре получалась каша, и при
+        переполнении очереди чья-то реплика пропадала совсем.
+
+        Ждём в отдельном потоке, чтобы не застопорить мост: пока идёт речь,
+        он продолжает читать журнал игры.
+        """
+        tts = getattr(self, "tts", None)
+        if tts is None or not hasattr(tts, "wait_quiet"):
+            return
+        if not await asyncio.to_thread(tts.wait_quiet, timeout):
+            logger.warning("не дождался тишины за %.0f с — говорим поверх", timeout)
 
     async def _handle_voice_stop(self, req: dict) -> None:
         """Player released the talk key: transcribe what was recorded and run
@@ -1132,6 +1155,12 @@ class OpenMWLogBridge:
         death_react = ""
         if player_text.startswith("__death_react__:"):
             death_react = player_text[len("__death_react__:"):].strip()
+            player_text = ""
+        # Стражник пришёл на вызов и разбирается, кто виноват. Раньше вызов
+        # стражи МГНОВЕННО вешал на игрока нападение — до всякого разбора.
+        inquiry = ""
+        if player_text.startswith("__inquiry__:"):
+            inquiry = player_text[len("__inquiry__:"):].strip()
             player_text = ""
         if player_text in ("__greet__", "__proactive__", "__surrender__"):
             player_text = ""   # lore_agent will generate a greeting unprompted
@@ -1218,6 +1247,12 @@ class OpenMWLogBridge:
                     int(hashlib.md5(npc_id.encode("utf-8", "ignore")).hexdigest(), 16) % 3
                 ],
                 "npc_disposition": req.get("npc_disposition"),
+                # Идёт ли этот человек за игроком прямо сейчас. Флаг приходил
+                # из игры и использовался только чтобы завести спутнику
+                # предысторию — в промпт он не попадал вовсе. Из-за этого
+                # Телери шла следом и в том же разговоре отрицала, что следует,
+                # уверяя, что это игрок за ней увязался.
+                "is_companion": str(req.get("is_companion") or "") in ("1", "true", "True"),
                 "bystanders": str(req.get("bystanders") or ""),
                 # Bodies in view and whose roof the NPC is under. Without these
                 # a guard who had just killed a man in someone else's house
@@ -1237,6 +1272,8 @@ class OpenMWLogBridge:
                 "is_proactive": is_proactive,
                 "is_surrender": is_surrender,
                 "theft_item": theft_item,
+                # «кто звал | кто начал» — дело, с которым стражник пришёл.
+                "inquiry": inquiry,
                 "npc_canon": str(req.get("npc_canon") or ""),
                 "npc_inventory": str(req.get("npc_inventory") or ""),
                 "death_react": death_react,

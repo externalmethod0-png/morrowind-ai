@@ -16,7 +16,7 @@ import logging
 import subprocess
 from pathlib import Path
 
-from tts_queue import SerialSpeaker, pitch_for, shift_pitch_wav
+from tts_queue import SerialSpeaker, pitch_for, race_pitch, shift_pitch_wav
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,11 @@ FEMALE_MODEL = PIPER_DIR / "ru_RU-irina-medium.onnx"
 
 LENGTHS = ["0.88", "0.95", "1.0", "1.06", "1.14"]   # tempo variants
 NOISES  = ["0.55", "0.667", "0.8"]                  # timbre variance
+
+# Замеренная высота самих голосов: синтез трёх фраз, медиана по автокорреляции.
+# Дмитрий заметно высок для мужчины, Ирина низка для женщины — оба сидят около
+# 177 Гц, поэтому без поправки данмер и босмер звучали одинаково.
+PIPER_HZ = {True: 178.0, False: 176.0}
 
 
 def _voice_for(npc_id: str, is_male: bool) -> tuple[Path, str, str]:
@@ -58,7 +63,12 @@ class PiperTTS(SerialSpeaker):
             model, length, noise = _voice_for(npc_id, is_male)
             # Two base voices for a whole province is not enough: a personal
             # pitch keeps two guards from sounding like the same man.
-            pitch = pitch_for(npc_id)
+            #
+            # Раса важнее личного разброса: в самой игре данмер-мужчина звучит
+            # на 80 Гц, а босмер на 171 — вдвое выше. Оба базовых голоса piper
+            # стоят на ~177, так что без поправки все расы были на одно лицо.
+            pitch = round(pitch_for(npc_id)
+                          * race_pitch(race, is_male, PIPER_HZ[bool(is_male)]), 3)
             length = f"{float(length) * pitch:.3f}"   # компенсируем темп
         self._slot = (self._slot + 1) % 6
         path = self.out_dir / f"voice_{self._slot}.wav"

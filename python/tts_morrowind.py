@@ -21,7 +21,7 @@ import threading
 import time
 from pathlib import Path
 
-from tts_queue import SerialSpeaker, pitch_for
+from tts_queue import SerialSpeaker, pitch_for, race_pitch
 
 logger = logging.getLogger(__name__)
 
@@ -33,12 +33,34 @@ VOICES_DIR = MOD_ROOT / "piper" / "morrowind"
 # Раса -> какой из обученных голосов ближе. Данмеры и имперцы получили свои;
 # остальным достаётся тот, что ближе по звучанию, — это честнее, чем один
 # синтезатор на всех.
+# Раса -> какой из обученных голосов ближе ПО ТЕМБРУ. Выбор не на глаз:
+# замерена высота родной озвучки каждой расы и наших четырёх голосов
+# (dm 79 Гц, im 145, df 174, if 188). К данмерскому пулу идут только те, кто
+# правда звучит низко; всех остальных ведём к имперскому, а разницу добирает
+# поправка по расе — см. race_pitch в tts_queue.
+#
+# Раньше сюда были свалены босмеры, каджиты и аргониане, и босмер получал
+# 80 Гц вместо своих 171. Это слышал игрок и это оказалось правдой.
 RACE_TO_POOL = {
     "dark elf": "d", "dunmer": "d",
+    "argonian": "d",                       # 91 Гц — единственный, кто рядом
     "imperial": "i", "breton": "i", "nord": "i", "redguard": "i",
-    "high elf": "i", "altmer": "i", "wood elf": "d", "bosmer": "d",
-    "khajiit": "d", "argonian": "d", "orc": "i", "orsimer": "i",
+    "high elf": "i", "altmer": "i", "orc": "i", "orsimer": "i",
+    "khajiit": "i", "wood elf": "i", "bosmer": "i",
 }
+
+# Высота НАШИХ голосов — снята с того, что модель реально произносит, а не с
+# клипов, на которых её учили. Разница заметная: по клипам выходило dm 79 / im 145 /
+# df 174 / if 188, а живой синтез даёт 88 / 136 / 148 / 200. Обучение сдвигает
+# голос, и если считать поправку от клипов, промах доходит до 18%.
+#
+# Замер: шесть фраз на пул, личный разброс и раса отключены, медиана по
+# автокорреляции. Переснять после дообучения любого голоса.
+#
+# Разброс от фразы к фразе — dm 10%, im 3%, df 7%, if 7%. Это пол точности:
+# точнее собственного дрожания модели попасть в расу нельзя, и лечится оно
+# только дообучением, а не арифметикой.
+POOL_HZ = {"dm": 84.0, "im": 132.8, "df": 159.3, "if": 191.1}
 
 
 class MorrowindTTS(SerialSpeaker):
@@ -121,7 +143,10 @@ class MorrowindTTS(SerialSpeaker):
         self._slot = (self._slot + 1) % 6
         out = self.out_dir / f"mw_{self._slot}.wav"
         pool = self._pool_for(race, is_male)
-        pitch = pitch_for(npc_id)
+        # Личная высота разводит соседей между собой, поправка по расе
+        # ставит голос туда, где он звучит в самой игре.
+        pitch = round(pitch_for(npc_id)
+                      * race_pitch(race, is_male, POOL_HZ.get(pool, 0.0)), 3)
         from audio_out import play, volume_for_distance
         try:
             with self._lock:

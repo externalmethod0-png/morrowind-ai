@@ -95,6 +95,46 @@ def clean(text: str) -> str:
     return text
 
 
+def _load_vo_text() -> dict[str, str]:
+    """Настоящие тексты реплик из файлов игры; собирает extract_vo_text.py."""
+    path = MOD / "data" / "vo_text.json"
+    if not path.exists():
+        print("нет data/vo_text.json — сначала tools/extract_vo_text.py")
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    print(f"текстов из игры: {len(data)}")
+    return data
+
+
+VO_TEXT: dict[str, str] = {}
+
+
+class _Transcriber:
+    """Vosk одной строкой: подать 16 кГц float, получить текст.
+
+    Держим один экземпляр модели на весь прогон — она грузится 4 секунды, а
+    клипов тут тысячи.
+    """
+
+    def __init__(self) -> None:
+        sys.path.insert(0, str(MOD / "python"))
+        from vosk import Model, SetLogLevel
+
+        SetLogLevel(-1)
+        self._model = Model(str(MOD / "data" / "vosk" / "vosk-ru-0.42-fast"))
+
+    def transcribe(self, audio) -> str:
+        import json as _json
+
+        import numpy as _np
+        from vosk import KaldiRecognizer
+
+        pcm = (_np.clip(audio, -1.0, 1.0) * 32767).astype(_np.int16).tobytes()
+        rec = KaldiRecognizer(self._model, 16000)
+        rec.AcceptWaveform(pcm)
+        return _json.loads(rec.FinalResult()).get("text", "")
+
+
 def build_pool(model, pool: str) -> dict:
     letter, gender = pool.split("/")
     src_dir = VO / letter / gender
@@ -114,6 +154,7 @@ def build_pool(model, pool: str) -> dict:
 
     files = sorted(src_dir.glob("*.mp3"))
     kept, skipped, seconds = len(done), 0, 0.0
+    from_asr = 0
     t0 = time.time()
 
     with meta_path.open("a", encoding="utf-8") as meta:
@@ -131,10 +172,14 @@ def build_pool(model, pool: str) -> dict:
                 skipped += 1
                 continue
 
-            text = clean(" ".join(
-                s.text for s in model.transcribe(
-                    resample(audio, rate, 16000), language="ru", beam_size=5,
-                    condition_on_previous_text=False)[0]))
+            # Текст берём из самой игры: в записях INFO лежит и имя mp3, и
+            # реплика. Распознавание врало в двух клипах из пяти — модель
+            # училась произносить не то, что звучит, и это оказалось главной
+            # причиной невнятности. Оно осталось только запасным путём.
+            text = VO_TEXT.get(name, "")
+            if not text:
+                text = clean(model.transcribe(resample(audio, rate, 16000)))
+                from_asr += 1
             if not text:
                 skipped += 1
                 continue
@@ -151,7 +196,8 @@ def build_pool(model, pool: str) -> dict:
                       f"речи {seconds/60:.1f} мин, прошло {el/60:.1f} мин", flush=True)
 
     return {"pool": pool, "kept": kept, "skipped": skipped,
-            "minutes": round(seconds / 60, 1), "dir": str(dst)}
+            "minutes": round(seconds / 60, 1), "from_asr": from_asr,
+            "dir": str(dst)}
 
 
 def main() -> int:
@@ -160,19 +206,14 @@ def main() -> int:
     print(f"источник: {VO}")
     print(f"результат: {OUT}\n", flush=True)
 
-    sys.path.insert(0, str(MOD / "python"))
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("sttd", MOD / "python" / "stt_daemon.py")
-    sttd = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(sttd)
-    sttd._add_cuda_dlls()
-
-    from faster_whisper import WhisperModel
-    # CPU: на этой карте распознавание непредсказуемо (6-71 с вместо 3), а тут
-    # тысячи клипов — стабильность важнее пиковой скорости.
-    model = WhisperModel(sttd.MODEL_DIR, device="cpu", compute_type="int8",
-                         cpu_threads=10)
-    print("модель распознавания загружена (CPU)\n", flush=True)
+    # Расшифровку делает Vosk. Раньше здесь был Whisper, но он ушёл вместе с
+    # переездом распознавания на Vosk, и этот путь молча сломался: сборщик
+    # падал на вызове, которого больше нет. Замечено, когда понадобилось
+    # собрать новые пулы.
+    global VO_TEXT
+    VO_TEXT = _load_vo_text()
+    model = _Transcriber()
+    print("модель распознавания загружена (Vosk, CPU)\n", flush=True)
 
     report = []
     for pool in pools:
