@@ -3840,6 +3840,25 @@ local function onUiModeChanged(data)
         cursorOnly = false
         pcall(function() I.UI.setPauseOnMode(INTERFACE_MODE, true) end)
     end
+
+    -- ТОРГОВЛЯ — НЕ КРАЖА. Слежка за чужим добром смотрит, не прибавилось ли
+    -- у игрока таких же вещей. После честной продажи золота прибавляется, и
+    -- Аррилл обвинял игрока в том, что тот обчистил его карманы, — сразу после
+    -- сделки, которую сам же и заключил.
+    --
+    -- Сундук и труп — та же беда: игрок законно забирает вещи, а снимок видит
+    -- пропажу. Поэтому при выходе из любого такого окна снимок ВЫБРАСЫВАЕМ и
+    -- набираем заново: сравнивать «до» и «после» тут нечего.
+    local prev = data and data.oldMode or nil
+    for _, m in ipairs({ prev, newMode }) do
+        local s = tostring(m or ''):lower()
+        if s:find('barter') or s:find('trade') or s:find('container')
+           or s:find('companion') or s:find('loot') then
+            theft.snap = {}
+            theft.cooldown = math.max(theft.cooldown, 5)
+            break
+        end
+    end
 end
 
 local function onInit()

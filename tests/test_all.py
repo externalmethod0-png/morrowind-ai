@@ -324,6 +324,29 @@ def t_fate_roles_match_between_python_and_lua():
         assert role in in_service, f"{role}: переезд есть, а селить некуда"
 
 
+def t_trading_is_not_theft():
+    """Честная сделка не должна выглядеть кражей.
+
+    Слежка за чужим добром считает, не прибавилось ли у игрока таких же вещей.
+    После продажи товара золота прибавляется — и Аррилл обвинил игрока в том,
+    что тот обчистил его карманы, сразу после сделки, которую сам заключил.
+
+    Сундук и труп — та же беда: игрок законно забирает вещи, а снимок видит
+    пропажу. Поэтому при выходе из таких окон снимок выбрасывается и набирается
+    заново: сравнивать «до» и «после» тут нечего.
+    """
+    lua = (ROOT / "openmw-mod" / "scripts" / "dialogue_ui.lua").read_text(encoding="utf-8")
+    i = lua.index("local function onUiModeChanged")
+    block = lua[i:i + 1800]
+
+    for mode in ("barter", "container", "companion"):
+        assert mode in block, f"окно «{mode}» не гасит слежку за кражей"
+    assert "theft.snap = {}" in block, "снимок не сбрасывается после сделки"
+    assert "theft.cooldown" in block, "нет паузы после сделки"
+    # Проверяем оба конца перехода: закрытие окна приходит как oldMode.
+    assert "oldMode" in block, "закрытие окна не отслеживается"
+
+
 def t_scenes_know_what_is_already_done():
     """Сцену нельзя ставить про дело, которое игрок уже закрыл.
 
@@ -2398,6 +2421,7 @@ def main() -> int:
             t_theft_accuses_once_per_incident,
             t_call_for_guards_is_not_a_verdict,
             t_scenes_know_what_is_already_done,
+            t_trading_is_not_theft,
             t_nobody_reveals_other_peoples_stashes,
             t_guard_walks_over_and_stops_the_fight,
             t_npcs_do_not_talk_over_each_other,
