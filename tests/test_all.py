@@ -434,6 +434,129 @@ def t_nobody_reveals_other_peoples_stashes():
     assert "СВОЙ тайник" in block, "у персонажа отняли право доверить своё"
 
 
+def t_lite_prompt_fits_a_small_model():
+    """Слабой модели — короткий промпт.
+
+    Полный системный промпт — 22 тысячи символов (около 7,5 тысяч токенов),
+    11 тегов в ответе и 20 значений ACTION. Домашняя 7-8-миллиардная модель на
+    таком плывёт: путает формат и теряет теги, а на разбор тратит больше
+    времени, чем на сам ответ.
+    """
+    from agents import lore_agent as la
+
+    kw = dict(npc_name="Аррилл", npc_race="High Elf", npc_class="trader",
+              npc_faction="", location="Сейда Нин", disposition=60)
+    full = la._build_system_prompt(**kw, lite=False)
+    lite = la._build_system_prompt(**kw, lite=True)
+
+    assert len(lite) * 3 < len(full), \
+        f"короткий промпт мало чем короче: {len(lite)} против {len(full)}"
+    assert len(lite) < 6000, f"короткий промпт разросся до {len(lite)} символов"
+
+    # В нём остаётся то, без чего мод не работает.
+    for must in ("<npc_response>", "EMOTION:", "ACTION:", "TARGET:"):
+        assert must in lite, f"из короткого промпта пропало {must}"
+    # Действий шесть, а не двадцать: остальные слабая модель всё равно
+    # применяет наугад.
+    assert "callguards" in lite and "poison" not in lite, \
+        "список действий не сокращён"
+    # Кто он и как относится к игроку — это важнее любых правил стиля.
+    assert "Аррилл" in lite and "60 из 100" in lite, \
+        "персонаж или отношение потерялись"
+
+    # Разбор должен переживать пропущенные теги: слабая модель их роняет.
+    text, emotion = la._parse_response(
+        "<npc_response>Проходи мимо.</npc_response>\nEMOTION:neutral")[:2]
+    assert text == "Проходи мимо." and emotion == "neutral", (text, emotion)
+
+
+def t_local_provider_gets_the_lite_prompt():
+    """Локальная модель получает короткий промпт сама, без настройки."""
+    from agents.lore_agent import LoreAgent
+
+    def profile(cfg):
+        a = LoreAgent.__new__(LoreAgent)
+        prov = str(cfg.get("provider") or "").lower()
+        p = str(cfg.get("prompt_profile") or "").lower()
+        # Повторяем решение из конструктора, не поднимая провайдера.
+        return p == "lite" if p in ("lite", "full") else prov in (
+            "ollama", "llamacpp", "lmstudio", "local")
+
+    assert profile({"provider": "ollama"}), "ollama не получил короткий промпт"
+    assert profile({"provider": "llamacpp"}), "llamacpp не получил короткий промпт"
+    assert not profile({"provider": "gemini"}), "облаку урезали промпт"
+    # Явная настройка сильнее догадки — в обе стороны.
+    assert profile({"provider": "gemini", "prompt_profile": "lite"}), \
+        "настройку lite проигнорировали"
+    assert not profile({"provider": "ollama", "prompt_profile": "full"}), \
+        "настройку full проигнорировали"
+
+
+def t_combat_is_stopped_properly():
+    """Драку прекращают снятием боевого пакета, а не подменой блужданием.
+
+    Взято у соседнего мода (drzdo/immersive_morrowind_llm_ai): там есть
+    отдельная команда npc_stop_combat. У нас же всем поблизости выдавался
+    Wander — бой при этом формально продолжался, и NPC мог вернуться к нему,
+    едва пакет отработает.
+    """
+    lua = (ROOT / "openmw-mod" / "scripts" / "dialogue_ui.lua").read_text(encoding="utf-8")
+    assert "function blame.calmDown" in lua, "нет отдельной команды прекращения боя"
+
+    body = lua[lua.index("function blame.calmDown"):]
+    body = body[:body.index("\nfunction blame.isGuard")]
+    assert "RemoveAIPackages" in body and "'Combat'" in body, \
+        "боевой пакет не снимается"
+    assert "Wander" not in body, "бой снова заглушают блужданием"
+
+    # И разбирательство пользуется именно ею.
+    tick = lua[lua.index("function blame.tick"):]
+    assert "blame.calmDown(" in tick[:tick.index("local function applyReply")], \
+        "стражник больше не разнимает драку"
+
+
+def t_guard_is_on_duty_even_without_a_call():
+    """Стражник ведёт себя как стражник всегда, а не только на вызове.
+
+    Отдельная ветка под роль — тоже мысль соседнего мода, там стража вынесена
+    в сборщик промпта особо.
+    """
+    agent = (ROOT / "python" / "agents" / "lore_agent.py").read_text(encoding="utf-8")
+    assert '"guard" in npc_class.lower()' in agent, "роль стражника нигде не учитывается"
+    assert "ТЫ НА СЛУЖБЕ" in agent, "стражнику не сказано, что он на службе"
+    assert "не грози тюрьмой тому, кто ничего не сделал" in agent, \
+        "стражник снова волен пугать тюрьмой просто так"
+    # Но не превращаем его в устав: человек в доспехе остаётся человеком.
+    assert "человек в доспехе, а не устав" in agent, "у стражника отняли характер"
+
+
+def t_scene_pause_matches_real_speech():
+    """Пауза между тактами сцены сверена с настоящей длительностью речи.
+
+    Замер на наших голосах (шесть реплик от 9 до 247 байт): звучание =
+    0.0369 × байт + 1.25. Прежняя оценка 0.055 × байт + 1.2 была ДЛИННЕЕ
+    звука на 0.4–2.2 секунды — наезда реплик не было, была мёртвая тишина.
+    """
+    lua = (ROOT / "openmw-mod" / "scripts" / "dialogue_ui.lua").read_text(encoding="utf-8")
+    body = lua[lua.index("function SC.lineSeconds"):]
+    body = body[:body.index("end") + 3]
+
+    import re
+    m = re.search(r"\* ([0-9.]+) \+ ([0-9.]+)", body)
+    assert m, "формула паузы не разобралась"
+    k, b = float(m.group(1)), float(m.group(2))
+
+    # Пауза обязана перекрывать звук на всех длинах — иначе следующий
+    # заговорит поверх.
+    for nbytes in (9, 31, 68, 99, 208, 247):
+        real = 0.0369 * nbytes + 1.25
+        hold = max(1.5, min(12.0, k * nbytes + b))
+        assert hold >= real, f"на {nbytes} байт пауза {hold:.2f} короче звука {real:.2f}"
+        # И не превращаться в тишину: полторы секунды сверху — уже перебор.
+        assert hold - real < 1.5, \
+            f"на {nbytes} байт пауза длиннее звука на {hold - real:.2f} с"
+
+
 def t_call_for_guards_is_not_a_verdict():
     """Крик «стража!» вызывает стражника, а не выписывает штраф.
 
@@ -473,8 +596,7 @@ def t_guard_walks_over_and_stops_the_fight():
 
     tick = lua[lua.index("function blame.tick"):]
     tick = tick[:tick.index("\nlocal function applyReply")]
-    assert "StartAIPackage" in tick and "Wander" in tick, \
-        "драка не прекращается при подходе стражника"
+    assert "blame.calmDown(" in tick, "драка не прекращается при подходе стражника"
     assert "__inquiry__:" in tick, "стражник приходит без дела на руках"
     assert "PATIENCE" in lua, "дело не затухает, если стражник не дошёл"
 
@@ -2469,6 +2591,11 @@ def main() -> int:
             t_companion_relationship_can_still_move,
             t_theft_accuses_once_per_incident,
             t_call_for_guards_is_not_a_verdict,
+            t_combat_is_stopped_properly,
+            t_lite_prompt_fits_a_small_model,
+            t_local_provider_gets_the_lite_prompt,
+            t_guard_is_on_duty_even_without_a_call,
+            t_scene_pause_matches_real_speech,
             t_scenes_know_what_is_already_done,
             t_trading_is_not_theft,
             t_ordinary_tone_is_the_default,

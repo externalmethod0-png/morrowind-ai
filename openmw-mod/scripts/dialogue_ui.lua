@@ -68,6 +68,27 @@ function blame.started(obj)
     return yes
 end
 
+-- Прекратить бой по-настоящему, а не заглушить его блужданием.
+--
+-- Движок умеет снимать пакет поведения: `RemoveAIPackages('Combat')` убирает
+-- именно драку и не трогает остального. Прежде здесь всем поблизости выдавался
+-- Wander — бой при этом формально продолжался, и NPC мог вернуться к нему,
+-- едва пакет отработает.
+function blame.calmDown(radius)
+    local calmed = 0
+    pcall(function()
+        for _, act in ipairs(nearby.actors or {}) do
+            if act ~= self_.object and act.type == types.NPC
+               and not types.Actor.isDead(act)
+               and (act.position - self_.object.position):length() < (radius or 900) then
+                act:sendEvent('RemoveAIPackages', 'Combat')
+                calmed = calmed + 1
+            end
+        end
+    end)
+    return calmed
+end
+
 function blame.isGuard(obj)
     local yes = false
     pcall(function()
@@ -2363,17 +2384,8 @@ function blame.tick()
     if d > blame.CLOSE then return end
     c.arrived = true
 
-    -- ДРАКА ОСТАНАВЛИВАЕТСЯ. Пока не разобрались — руки прочь: всех, кто
-    -- поблизости машет оружием, переводим в мирное поведение.
-    pcall(function()
-        for _, act in ipairs(nearby.actors or {}) do
-            if act ~= self_.object and act.type == types.NPC
-               and not types.Actor.isDead(act)
-               and (act.position - self_.object.position):length() < 900 then
-                act:sendEvent('StartAIPackage', { type = 'Wander', distance = 128, duration = 1 })
-            end
-        end
-    end)
+    -- ДРАКА ОСТАНАВЛИВАЕТСЯ. Пока не разобрались — руки прочь.
+    blame.calmDown(900)
     showMsg('Стража: «А ну разошлись! Оружие убрали, оба.»')
 
     -- И разговор — со стражником, с делом на руках.
@@ -3405,8 +3417,19 @@ end
 
 -- Сколько держать реплику на экране: примерно столько же её и произносят
 -- (замер piper — около 0.055 с на символ), плюс вдох.
+-- Сколько держать такт, пока реплика звучит. Пауза должна ПЕРЕКРЫВАТЬ звук,
+-- иначе следующий заговорит поверх; но лишнее ожидание превращает сцену в
+-- череду молчаливых пауз.
+--
+-- Замерено на наших голосах (шесть реплик от 9 до 247 байт): звучание =
+-- 0.0369 × байт + 1.25. Прежняя оценка 0.055 × байт + 1.2 была длиннее
+-- настоящего звука на 0.4–2.2 секунды — наезда не было, была мёртвая тишина.
+-- Берём замеренную прямую и полсекунды сверху на естественную паузу.
+--
+-- Длина в БАЙТАХ, а не в буквах: кириллица в utf-8 — два байта на букву.
+-- Переснять, если сменится набор голосов или темп речи.
 function SC.lineSeconds(text)
-    return math.max(1.8, math.min(11.0, #tostring(text or '') * 0.055 + 1.2))
+    return math.max(1.5, math.min(12.0, #tostring(text or '') * 0.037 + 1.6))
 end
 
 function SC.actorById(id)

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import sys
 import time
@@ -146,8 +147,16 @@ async def run_model(model: str, raw_log: list, rounds: int = 1) -> dict:
     agent._temperature = 0.8
     agent._max_tokens = 300
     agent.model_name = model
+    # Домашней модели — короткий промпт: 3 тысячи символов вместо 22.
+    # Прошлый замер шёл на полном, и все модели поголовно проваливали действия
+    # («прямая просьба идти» — 0 из 3 у каждой), а ответ шёл 13-17 секунд.
+    # Проверять их на промпте, который они физически не удерживают, нечестно.
+    # MWAI_BENCH_FULL=1 вернёт прежний режим для сравнения.
+    agent._lite = os.environ.get("MWAI_BENCH_FULL", "") == ""
 
-    print(f"\n{'=' * 70}\n{model}\n{'=' * 70}", flush=True)
+    print(f"\n{'=' * 70}\n{model}  "
+          f"(промпт {'короткий' if agent._lite else 'полный'})\n{'=' * 70}",
+          flush=True)
 
     # Прогрев: первый запрос грузит модель в память, его время не показательно.
     t0 = time.time()
