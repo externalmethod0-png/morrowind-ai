@@ -28,7 +28,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "python"))
 
-BASE_URL = "http://127.0.0.1:1234/v1"
+import os
+BASE_URL = os.environ.get("MWAI_BENCH_URL", "http://127.0.0.1:1234/v1")
 
 # Состав нарочно разный: имена русские, один персонаж сюжетный (его трогать
 # нельзя), один — женщина, чтобы видеть, следит ли модель за родом.
