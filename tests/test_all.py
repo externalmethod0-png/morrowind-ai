@@ -324,6 +324,55 @@ def t_fate_roles_match_between_python_and_lua():
         assert role in in_service, f"{role}: переезд есть, а селить некуда"
 
 
+def t_ordinary_tone_is_the_default():
+    """Обычный разговор идёт обычными словами.
+
+    Торговец Аррилл крыл матом покупателя, который просто торговался. Правило
+    «мат — это соль, а не еда» в файле мира было и раньше, но ВЕСЬ блок был про
+    ругань — одним объёмом он перебивал собственную оговорку.
+    """
+    rules = (ROOT / "data" / "world_rules.txt").read_text(encoding="utf-8")
+    i = rules.index("ОБЫЧНЫЙ ТОН")
+    block = rules[i:]
+
+    assert "БРАНЬ — РЕАКЦИЯ, А НЕ МАНЕРА" in block, "брань снова манера речи"
+    assert "КТО РАБОТАЕТ С ЛЮДЬМИ — ДЕРЖИТ ЛИЦО" in block, \
+        "торговец опять волен хамить покупателю"
+    assert "обхамивший покупателя" in block, \
+        "не объяснено, почему торговцу это невыгодно"
+    # Тон должен зависеть от отношения, а не быть общим фоном.
+    assert "СМОТРИ НА ОТНОШЕНИЕ" in block, "тон не привязан к отношению"
+
+    # И объём: раздел про брань не должен снова разрастись больше остального.
+    swear = block[block.index("БРАНЬ — РЕАКЦИЯ"):block.index("КТО РАБОТАЕТ")]
+    assert len(swear) < len(block) / 3, \
+        "раздел про ругань снова перевешивает всё остальное"
+
+
+def t_nobody_begs_the_player_for_coin():
+    """Ищущему работу дают работу, а не тянут с него деньги.
+
+    Игрок вышел из тюрьмы и пошёл искать заработок — а все встречные клянчили
+    монеты. Половина причины была в таблице целей: почти каждая звучала как
+    «скопить», «выкупить», «накопить», а промпт велит подводить разговор к
+    своей цели.
+    """
+    agent = (ROOT / "python" / "agents" / "lore_agent.py").read_text(encoding="utf-8")
+    assert "У ЧУЖАКА НЕ ПОПРОШАЙНИЧАЮТ" in agent, "деньги снова клянчат у первого встречного"
+    assert "он НАНИМАЕТ" in agent, "нужда в деньгах не превращается в наём"
+    assert "ЕСЛИ ПРИШЛИ ЗА РАБОТОЙ — ДАЙ РАБОТУ" in agent, \
+        "ищущего заработок нечем занять"
+    # Нищему просить не запрещаем — иначе пропадёт целый тип персонажа.
+    assert "нищий" in agent, "у нищего отняли право просить"
+
+    import re
+    from openmw_log_bridge import OpenMWLogBridge as B
+    money = re.compile(r"скоп|выкуп|накоп|долг|деньг|плат|заработ|сбыт|процент")
+    goals = [g for pool in B.GOALS_BY_TRADE.values() for g in pool]
+    share = sum(1 for g in goals if money.search(g)) / len(goals)
+    assert share < 0.35, f"цели снова почти все денежные: {share:.0%}"
+
+
 def t_trading_is_not_theft():
     """Честная сделка не должна выглядеть кражей.
 
@@ -2422,6 +2471,8 @@ def main() -> int:
             t_call_for_guards_is_not_a_verdict,
             t_scenes_know_what_is_already_done,
             t_trading_is_not_theft,
+            t_ordinary_tone_is_the_default,
+            t_nobody_begs_the_player_for_coin,
             t_nobody_reveals_other_peoples_stashes,
             t_guard_walks_over_and_stops_the_fight,
             t_npcs_do_not_talk_over_each_other,
