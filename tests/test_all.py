@@ -451,15 +451,24 @@ def t_lite_prompt_fits_a_small_model():
 
     assert len(lite) * 3 < len(full), \
         f"короткий промпт мало чем короче: {len(lite)} против {len(full)}"
-    assert len(lite) < 6000, f"короткий промпт разросся до {len(lite)} символов"
+    assert len(lite) < 8000, f"короткий промпт разросся до {len(lite)} символов"
 
     # В нём остаётся то, без чего мод не работает.
     for must in ("<npc_response>", "EMOTION:", "ACTION:", "TARGET:"):
         assert must in lite, f"из короткого промпта пропало {must}"
-    # Действий шесть, а не двадцать: остальные слабая модель всё равно
-    # применяет наугад.
-    assert "callguards" in lite and "poison" not in lite, \
-        "список действий не сокращён"
+    # ВСЕ действия и ВСЕ теги на месте: короткий промпт — это сжатое
+    # описание, а не урезанные возможности. Первая версия резала до семи
+    # действий, и с ними отваливалась половина мода: отношение не менялось,
+    # денег не передать, судеб не прожить.
+    import re
+    full_p = la._build_system_prompt(**kw, lite=False)
+    m = re.search(r"ACTION must be exactly one of: (.+)", full_p)
+    for act in [a.strip() for a in m.group(1).split(",")]:
+        assert re.search(r"\b" + re.escape(act) + r"\b", lite), \
+            f"в коротком промпте потерялось действие {act}"
+    for tag in ("EMOTION", "ACTION", "TARGET", "DISP", "GOLD", "ITEM",
+                "HEARD", "LOAN", "DEAL", "COND", "FATE"):
+        assert tag + ":" in lite, f"в коротком промпте потерялся тег {tag}"
     # Кто он и как относится к игроку — это важнее любых правил стиля.
     assert "Аррилл" in lite and "60 из 100" in lite, \
         "персонаж или отношение потерялись"
