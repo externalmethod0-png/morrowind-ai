@@ -24,6 +24,21 @@ logger = logging.getLogger(__name__)
 
 MAX_QUEUED = 6   # a scene is a few speakers; more than that means we lag badly
 
+# Ремарка в звёздочках: «*вытирает тряпкой стойку, не поднимая глаз*».
+#
+# Модель пишет их примерно в трети реплик, хотя промпт и запрещает. Бороться
+# оказалось и бесполезно, и вредно: жест живой и в субтитрах смотрится хорошо.
+# Поэтому в текст он проходит, а сюда — нет: синтезатор прочёл бы «звёздочка
+# вытирает тряпкой стойку звёздочка», и вся сцена сломалась бы.
+_STAGE_RE = __import__("re").compile(r"\*[^*\n]{1,80}\*")
+
+
+def strip_stage_directions(text: str) -> str:
+    """Речь без ремарок — то, что надо произнести вслух."""
+    import re as _re
+    s = _STAGE_RE.sub(" ", str(text or ""))
+    return _re.sub(r"\s{2,}", " ", s).strip()
+
 # Personal pitch per NPC, the same one every time. Any TTS backend has a small
 # pool of base voices, so without this every guard sounds like every other one.
 # Личный разброс СУЖЕН до ±8%: раньше он был ±12 и перебивал расу — босмер
@@ -137,7 +152,7 @@ class SerialSpeaker:
 
     def speak_async(self, text: str, npc_id: str, is_male: bool,
                     distance: float = 0.0, race: str = "") -> None:
-        text = (text or "").strip()
+        text = strip_stage_directions(text)
         if not text:
             return
         q = getattr(self, "_q", None)

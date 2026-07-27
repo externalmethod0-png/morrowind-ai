@@ -154,11 +154,31 @@ def t_lua_stays_under_the_local_limit():
                           "собери связанные в одну таблицу")
 
 
-def t_parse_drops_stage_directions():
-    """Ремарки не произносят вслух — а синтезатор произнёс бы."""
+def t_gesture_is_seen_but_not_spoken():
+    """Жест виден в подписи, но не звучит.
+
+    Раньше ремарки ВЫРЕЗАЛИСЬ при разборе: промпт запрещает описания поз, а
+    модель всё равно писала их в трети реплик. Борьба была проигранной и
+    вредной — жест живой, а выбрасывался вместе с потраченным на него
+    временем. Теперь он доходит до подписи, а озвучка его пропускает: иначе
+    синтезатор прочёл бы «звёздочка вытирает тряпкой стойку звёздочка».
+    """
     from agents.lore_agent import _parse_response
-    raw = "<npc_response>\n*вздыхает* Ступай себе мимо.\n</npc_response>\nACTION:none"
-    assert _parse_response(raw)[0] == "Ступай себе мимо."
+    from tts_queue import strip_stage_directions
+
+    raw = ("<npc_response>\n*вздыхает* Ступай себе мимо.\n"
+           "</npc_response>\nACTION:none")
+    text = _parse_response(raw)[0]
+    assert text == "*вздыхает* Ступай себе мимо.", text
+    assert strip_stage_directions(text) == "Ступай себе мимо.", text
+
+    # Жест посреди речи тоже вырезается из озвучки, но остаётся в подписи.
+    mid = "Двести? *сплюнул* Не в моём заведении."
+    assert strip_stage_directions(mid) == "Двести? Не в моём заведении."
+
+    # А реплика из ОДНОГО жеста речью не является: NPC «сказал» бы пустоту.
+    only = "<npc_response>*молча смотрит*</npc_response>\nACTION:none"
+    assert _parse_response(only)[0].strip() == "", _parse_response(only)[0]
 
 
 def t_filler_bank_speaks_in_the_npcs_own_voice():
@@ -2593,7 +2613,7 @@ def main() -> int:
             t_parse_clean, t_parse_no_markers_strips_tags, t_parse_echo_injection_blocked,
             t_parse_drops_invented_service_lines, t_parse_drops_invented_markers,
             t_parse_survives_local_model_quirks, t_reply_trimmed_to_fit_the_window,
-            t_parse_drops_stage_directions, t_scene_actions_never_hit_the_player,
+            t_gesture_is_seen_but_not_spoken, t_scene_actions_never_hit_the_player,
             t_no_npc_is_frozen_for_days, t_fate_roles_match_between_python_and_lua,
             t_voice_pitch_matches_the_race,
             t_finished_quests_are_not_forgotten,
