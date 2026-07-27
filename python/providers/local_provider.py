@@ -181,6 +181,12 @@ class LocalProvider(LLMProvider):
             "model": self.model_name, "messages": chat,
             "temperature": float(kwargs.get("temperature", 0.8)),
             "max_tokens": int(kwargs.get("max_tokens", 400)),
+            # Штраф за повторное употребление: домашняя модель открывала
+            # разные реплики одним и тем же зачином («Я не слежу за…» четыре
+            # раза из четырёх). Температура лечит это ценой формата, а штраф —
+            # нет, он давит только повтор.
+            "presence_penalty": float(kwargs.get("presence_penalty", 0.0)),
+            "frequency_penalty": float(kwargs.get("frequency_penalty", 0.0)),
             "stream": True,
         }
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -226,6 +232,8 @@ class LocalProvider(LLMProvider):
             "model": self.model_name,
             "messages": chat,
             "temperature": float(kwargs.get("temperature", 0.8)),
+            "presence_penalty": float(kwargs.get("presence_penalty", 0.0)),
+            "frequency_penalty": float(kwargs.get("frequency_penalty", 0.0)),
             "max_tokens": int(kwargs.get("max_tokens", 400)),
             "stream": False,
         }

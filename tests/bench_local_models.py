@@ -164,6 +164,7 @@ async def run_model(model: str, raw_log: list, rounds: int = 1) -> dict:
     # Потолок длины ответа: реплика — одно-два предложения, а генерация идёт
     # по токену и стоит времени. Настраивается для сравнения замеров.
     agent._max_tokens = int(os.environ.get("MWAI_BENCH_MAXTOK", "300"))
+    agent._presence = float(os.environ.get("MWAI_BENCH_PRESENCE", "0.0"))
     agent.model_name = model
     # Домашней модели — короткий промпт: 3 тысячи символов вместо 22.
     # Прошлый замер шёл на полном, и все модели поголовно проваливали действия

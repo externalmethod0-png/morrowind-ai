@@ -1088,6 +1088,16 @@ class LoreAgent:
         if self._lite and "max_output_tokens" not in config:
             self._max_tokens = 160
 
+        # Штраф за повтор ПРОБОВАЛИ и отвергли замером. Идея была неверна в
+        # корне: presence_penalty давит повтор ВНУТРИ одного ответа, а не между
+        # разными вызовами — каждый запрос начинается с чистого листа, и на
+        # одинаковые зачины у разных реплик он не влияет никак.
+        #
+        # Замер (четыре круга): одинаковых зачинов 9 и без него, и с ним 0.5;
+        # зато точность упала с 28 из 28 до 26. Оставляем ноль, но настройка
+        # доступна — на других моделях может пригодиться.
+        self._presence: float = float(provider_cfg.get("presence_penalty", 0.0))
+
         logger.info(
             "LoreAgent initialised: provider=%s model=%s промпт=%s",
             provider_cfg.get("provider"),
@@ -1513,6 +1523,7 @@ class LoreAgent:
                     on_text=lambda raw: on_partial(partial_text(raw)),
                     temperature=self._temperature,
                     max_tokens=self._max_tokens,
+                    presence_penalty=self._presence,
                 )
             )
         else:
@@ -1522,6 +1533,7 @@ class LoreAgent:
                     messages=messages,
                     temperature=self._temperature,
                     max_tokens=self._max_tokens,
+                    presence_penalty=self._presence,
                 )
             )
 
