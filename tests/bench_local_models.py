@@ -301,6 +301,11 @@ async def main() -> int:
         else:
             only.append(a)
     models = [m for m in MODELS if not only or any(a in m for a in only)]
+    # Имя, которого нет в списке, — это не повод ничего не мерить: моделей
+    # появляется больше, чем правится список. Vikhr так и потерялся: стенд
+    # молча выбрал ноль моделей и не выдал итога.
+    if only and not models:
+        models = list(only)
     for m in models:
         results.append(await run_model(m, raw_log, rounds))
         (ROOT / "data" / "bench_raw.txt").write_text("".join(raw_log), encoding="utf-8")
