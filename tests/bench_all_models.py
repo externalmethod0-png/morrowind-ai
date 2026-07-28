@@ -104,11 +104,14 @@ def main() -> int:
         if not swap_to(model):
             results[model] = {"диалоги": "не загрузилась", "сцены": "—"}
             continue
-        d = run_bench("bench_local_models.py", model.split("-")[0], "4",
-                      ROOT / "data" / f"bench_{model[:18]}_dlg.txt")
+        # ПОЛНОЕ имя, а не первое слово: под «saineko» подходят и q2_k, и
+        # q3_k_s, и стенд намерил бы не ту квантизацию, о которой отчитался.
+        safe = model.replace("@", "_").replace("/", "_")[:20]
+        d = run_bench("bench_local_models.py", model, "4",
+                      ROOT / "data" / f"bench_{safe}_dlg.txt")
         print(f"  диалоги: {d}", flush=True)
         s = run_bench("bench_local_scenes.py", model, "3",
-                      ROOT / "data" / f"bench_{model[:18]}_scn.txt")
+                      ROOT / "data" / f"bench_{safe}_scn.txt")
         print(f"  сцены:   {s}", flush=True)
         results[model] = {"диалоги": d, "сцены": s}
 
