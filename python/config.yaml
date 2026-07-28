@@ -36,30 +36,46 @@ models:
   # платить меньше на облаке (lite) или выжать максимум из домашней модели,
   # которой хватает памяти (full).
 
-  # Разговоры с NPC. Идут на СВОЕЙ модели в LM Studio: без квот, без
-  # интернета, бесплатно. Если сервер не поднят, ответы молча уходят в облако
-  # по блоку fallback — NPC не замолкают.
+  # Разговоры с NPC. По умолчанию — облако: работает сразу после мастера
+  # установки, ничего скачивать и поднимать не надо.
   lore_agent:
-    provider: local
-    base_url: http://localhost:1234/v1   # LM Studio; Ollama — :11434/v1
-    model: gigachat3.1-10b-a1.8b         # пусто = какая загружена в сервере
-    prompt_profile: lite
-    temperature: 0.5
-    timeout: 90
-    fallback:
-      provider: gemini
-      model: gemini-flash-lite-latest
+    provider: gemini
+    model: gemini-flash-lite-latest
+    prompt_profile: full     # full | lite — см. раздел про две инструкции
+    temperature: 0.8
 
   # Сценки между NPC — по этому же блоку работает scene_agent.
   d2d_agent:
-    provider: local
-    base_url: http://localhost:1234/v1
-    model: gigachat3.1-10b-a1.8b
+    provider: gemini
+    model: gemini-flash-lite-latest
     temperature: 0.9
-    timeout: 120
-    fallback:
-      provider: gemini
-      model: gemini-flash-lite-latest
+
+  # ── СВОЯ МОДЕЛЬ ВМЕСТО ОБЛАКА ─────────────────────────────────────────────
+  # Замени два блока выше на такие — и разговоры со сценками пойдут через
+  # LM Studio: без ключа, без квот, бесплатно. В LM Studio нужно нажать
+  # «Start Server» (вкладка Developer) и загрузить модель — КАК ИМЕННО
+  # загружать, см. ниже, это важнее, чем кажется.
+  #
+  # lore_agent:
+  #   provider: local
+  #   base_url: http://localhost:1234/v1   # LM Studio; Ollama — :11434/v1
+  #   model: gigachat3.1-10b-a1.8b         # пусто = какая загружена в сервере
+  #   prompt_profile: lite
+  #   temperature: 0.5
+  #   timeout: 90
+  #   fallback:                            # сервер не поднят — уйдём в облако
+  #     provider: gemini
+  #     model: gemini-flash-lite-latest
+  #
+  # d2d_agent:
+  #   provider: local
+  #   base_url: http://localhost:1234/v1
+  #   model: gigachat3.1-10b-a1.8b
+  #   temperature: 0.9
+  #   timeout: 120
+  #   fallback:
+  #     provider: gemini
+  #     model: gemini-flash-lite-latest
 
   # ВНИМАНИЕ: этому агенту нужно зрение, а домашние модели его не умеют —
   # оставляем в облаке. Локальный провайдер картинку молча выбросит.
@@ -72,6 +88,22 @@ models:
     provider: gemini
     model: gemini-flash-lite-latest
     temperature: 0.2
+
+  # ── КАК ЗАГРУЖАТЬ МОДЕЛЬ (важнее, чем кажется) ───────────────────────────
+  # В LM Studio есть настройка "parallel" — сколько запросов модель ведёт
+  # разом. Она НЕ бесплатна: контекст делится между слотами поровну. При
+  # контексте 8192 и parallel 4 каждому запросу достаётся 2048 токенов, а
+  # настоящий запрос мода весит ~3300 — он не помещается, и llama.cpp
+  # разбирает инструкцию ЗАНОВО на каждую реплику. В игре это выглядело как
+  # «PROCESSING PROMPT 0.00%» и двадцать секунд ожидания.
+  #
+  # Грузить так (или выставить то же в окне загрузки LM Studio):
+  #     lms load gigachat3.1-10b-a1.8b --gpu max --context-length 8192 --parallel 1
+  #
+  # Один слот на весь контекст — запрос помещается целиком, начало промпта
+  # переиспользуется, тёплый ответ приходит за ~3.5 секунды вместо двадцати.
+  # Порядок блоков в промпте подобран под это же (см. lore_agent.py): всё
+  # неизменное идёт первым, персонаж — последним.
 
   # ── ЗАМЕР ДОМАШНИХ МОДЕЛЕЙ ────────────────────────────────────────────────
   # tests/bench_all_models.py: каждая модель мерится ОДНА в видеопамяти —

@@ -154,6 +154,37 @@ def t_lua_stays_under_the_local_limit():
                           "собери связанные в одну таблицу")
 
 
+def t_gesture_belongs_to_this_person():
+    """Жест — из своего ремесла, и в общей части промпта его нет.
+
+    Босмер Фаргот бродит у таможни и ищет своё кольцо — а в игре он «протирал
+    тряпкой стойку». Стойки там нет и не было: жест списан дословно с
+    единственного примера в инструкции. Мелкая модель копирует то, что видит
+    перед собой, и уговорами это не лечится — замер показал, что доля
+    скопированного жеста от правок в тексте не двигается.
+
+    Поэтому готового жеста в неизменной части больше нет вовсе, а пример
+    уехал в хвост, который и так свой у каждого NPC: копировать модель будет
+    всё равно, так пусть копирует ВЕРНОЕ.
+    """
+    from agents.lore_agent import _build_system_prompt, class_gesture
+
+    assert class_gesture("Publican") == "протирает стойку"
+    assert class_gesture("Guard") != class_gesture("Publican")
+    assert class_gesture("Commoner") == class_gesture("")  # незнакомое — общий
+
+    prompt = _build_system_prompt(
+        npc_name="Фаргот", npc_race="Bosmer", npc_class="Commoner",
+        npc_faction="", location="Сейда Нин", disposition=60,
+        life_facts=[], lite=True)
+
+    head = prompt.split("ТЫ: ")[0]
+    for prop in ("стойк", "прилавк", "наковальн", "кружк", "тряпк"):
+        assert prop not in head, f"утварь {prop!r} снова в общей части промпта"
+
+    assert f"*{class_gesture('Commoner')}*" in prompt
+
+
 def t_gesture_is_seen_but_not_spoken():
     """Жест виден в подписи, но не звучит.
 
@@ -2613,7 +2644,8 @@ def main() -> int:
             t_parse_clean, t_parse_no_markers_strips_tags, t_parse_echo_injection_blocked,
             t_parse_drops_invented_service_lines, t_parse_drops_invented_markers,
             t_parse_survives_local_model_quirks, t_reply_trimmed_to_fit_the_window,
-            t_gesture_is_seen_but_not_spoken, t_scene_actions_never_hit_the_player,
+            t_gesture_is_seen_but_not_spoken,
+            t_gesture_belongs_to_this_person, t_scene_actions_never_hit_the_player,
             t_no_npc_is_frozen_for_days, t_fate_roles_match_between_python_and_lua,
             t_voice_pitch_matches_the_race,
             t_finished_quests_are_not_forgotten,
