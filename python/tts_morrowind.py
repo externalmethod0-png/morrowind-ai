@@ -41,13 +41,30 @@ VOICES_DIR = MOD_ROOT / "piper" / "morrowind"
 #
 # Раньше сюда были свалены босмеры, каджиты и аргониане, и босмер получал
 # 80 Гц вместо своих 171. Это слышал игрок и это оказалось правдой.
+# Раса -> буква своего пула озвучки. В игре есть все двадцать пулов, и
+# каждому теперь соответствует свой обученный голос — по мере готовности.
+#
+# Пока пул не обучен, подставляется ЗАПАСНОЙ из FALLBACK: голос не тот, но
+# персонаж говорит. Как только модель появится в piper/morrowind, она
+# подхватится сама — код смотрит на то, что реально загружено.
 RACE_TO_POOL = {
     "dark elf": "d", "dunmer": "d",
-    "argonian": "d",                       # 91 Гц — единственный, кто рядом
-    "imperial": "i", "breton": "i", "nord": "i", "redguard": "i",
-    "high elf": "i", "altmer": "i", "orc": "i", "orsimer": "i",
-    "khajiit": "i", "wood elf": "i", "bosmer": "i",
+    "imperial": "i",
+    "argonian": "a",
+    "khajiit": "k",
+    "nord": "n",
+    "breton": "b",
+    "orc": "o", "orsimer": "o",
+    "redguard": "r",
+    "high elf": "h", "altmer": "h",
+    "wood elf": "w", "bosmer": "w",
 }
+
+# Кем подменить, пока свой голос не обучен. Выбрано по высоте основного тона
+# родной озвучки: аргонианин (91 Гц) ближе к данмеру (80), остальные к
+# имперцу (119). Это компромисс по высоте, а не по тембру — потому и слышно.
+FALLBACK = {"a": "d", "k": "i", "n": "i", "b": "i",
+            "o": "i", "r": "i", "h": "i", "w": "i"}
 
 # Высота НАШИХ голосов — снята с того, что модель реально произносит, а не с
 # клипов, на которых её учили. Разница заметная: по клипам выходило dm 79 / im 145 /
@@ -122,8 +139,11 @@ class MorrowindTTS(SerialSpeaker):
 
     def _pool_for(self, race: str, is_male: bool) -> str:
         letter = RACE_TO_POOL.get((race or "").strip().lower(), "d")
-        pool = letter + ("m" if is_male else "f")
-        return pool if pool in self.voices else (self.voices[0] if self.voices else "dm")
+        sex = "m" if is_male else "f"
+        for cand in (letter + sex, FALLBACK.get(letter, "i") + sex, "d" + sex):
+            if cand in self.voices:
+                return cand
+        return self.voices[0] if self.voices else "dm"
 
     # ------------------------------------------------------------------ речь
 

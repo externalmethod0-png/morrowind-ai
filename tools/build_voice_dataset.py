@@ -40,11 +40,21 @@ JUNK = ("продолжение следует", "субтитры", "amara.org"
 
 
 def decode_mp3(path: Path) -> tuple[np.ndarray, int] | None:
-    """mp3 -> моно float32. Декодер берём из av (он идёт с faster-whisper)."""
+    """mp3 -> моно float32. Декодер — av.
+
+    ПАДАЕМ ГРОМКО, если его нет. Раньше здесь возвращался None, и отсутствие
+    декодера выглядело как «все 235 клипов отсеяны» — обычный отчёт, в котором
+    ничего не сломано. Такую поломку не видно, пока не полезешь проверять
+    руками. Модуль пришёл вместе с faster-whisper и ушёл вместе с ним, когда
+    распознавание переехало на Vosk.
+    """
     try:
         import av
-    except ImportError:
-        return None
+    except ImportError as exc:  # noqa: BLE001
+        raise SystemExit(
+            "нет декодера mp3 (модуль av) — без него не прочитать ни одного "
+            "клипа игры.\n    venv\\Scripts\\python.exe -m pip install av"
+        ) from exc
     try:
         with av.open(str(path)) as container:
             stream = container.streams.audio[0]
@@ -195,6 +205,9 @@ def build_pool(model, pool: str) -> dict:
                 print(f"  [{pool}] {i}/{len(files)}: годных {kept}, отсеяно {skipped}, "
                       f"речи {seconds/60:.1f} мин, прошло {el/60:.1f} мин", flush=True)
 
+    if kept == 0:
+        print(f"  [{pool}] НИ ОДНОГО ГОДНОГО КЛИПА из {len(files)} — "
+              "это поломка сборщика, а не свойство озвучки")
     return {"pool": pool, "kept": kept, "skipped": skipped,
             "minutes": round(seconds / 60, 1), "from_asr": from_asr,
             "dir": str(dst)}

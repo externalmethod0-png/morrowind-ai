@@ -40,30 +40,18 @@ models:
   # ярлыком llamacpp\ЗАПУСК СЕРВЕРА.bat; если он не поднят, запросы молча
   # уходят в облако по блоку fallback и персонажи не замолкают.
   lore_agent:
-    provider: local
-    base_url: http://localhost:8090/v1
-    model: gigachat3.1-10b-a1.8b
-    slot: 0                  # разговорный слот — см. пояснение ниже
-    prompt_profile: lite
-    temperature: 0.5
-    timeout: 90
-    fallback:
-      provider: gemini
-      model: gemini-flash-lite-latest
+    provider: gemini
+    model: gemini-flash-lite-latest
+    prompt_profile: full     # full | lite — см. раздел про две инструкции
+    temperature: 0.8
 
   # Сценки между NPC — по этому же блоку работает scene_agent.
   # СВОЙ слот, и это главное: у сценочной записки с разговорной НЕТ общего
   # начала, поэтому на одном слоте каждая сценка стирала разбор правил мира.
   d2d_agent:
-    provider: local
-    base_url: http://localhost:8090/v1
-    model: gigachat3.1-10b-a1.8b
-    slot: 1                  # слот сценок — отдельный
+    provider: gemini
+    model: gemini-flash-lite-latest
     temperature: 0.9
-    timeout: 120
-    fallback:
-      provider: gemini
-      model: gemini-flash-lite-latest
 
   # ── СВОЯ МОДЕЛЬ ВМЕСТО ОБЛАКА ─────────────────────────────────────────────
   # Замени два блока выше на такие — и разговоры со сценками пойдут через

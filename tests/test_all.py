@@ -873,6 +873,44 @@ def t_mood_does_not_outrank_the_engine():
         "без отношения осадок должен оставаться как есть"
 
 
+def t_each_race_gets_its_own_voice_when_trained():
+    """Своя раса — свой голос, а пока не обучен — ближайший, но не молчание.
+
+    В игре двадцать пулов озвучки, по одному на расу и пол. Обучены были
+    четыре самых крупных, и остальным восьми расам подставлялся имперский
+    голос со сдвигом высоты: аргонианин говорил данмером, хаджит и орк —
+    имперцем. Высота совпадала, тембр нет — игрок это слышит как «голос не
+    тот».
+
+    Подстановка смотрит на то, что РЕАЛЬНО загружено: как только обучится
+    свой пул, он подхватится сам, без правок в коде.
+    """
+    from tts_morrowind import MorrowindTTS, RACE_TO_POOL
+
+    tts = MorrowindTTS.__new__(MorrowindTTS)
+
+    # Все десять рас игры должны быть известны — включая написание из ESM.
+    for race in ("dark elf", "imperial", "argonian", "khajiit", "nord",
+                 "breton", "orc", "redguard", "high elf", "wood elf"):
+        assert race in RACE_TO_POOL, f"раса {race!r} не знает своего пула"
+
+    # Обучены только данмеры с имперцами — остальные получают запасной.
+    tts.voices = ["dm", "df", "im", "if"]
+    assert tts._pool_for("Argonian", True) == "dm"    # ближе по высоте
+    assert tts._pool_for("Khajiit", True) == "im"
+    assert tts._pool_for("Nord", False) == "if"
+
+    # Обучили зверорас — они переключаются сами.
+    tts.voices = ["dm", "df", "im", "if", "am", "af", "km", "kf"]
+    assert tts._pool_for("Argonian", True) == "am"
+    assert tts._pool_for("Argonian", False) == "af"
+    assert tts._pool_for("Khajiit", True) == "km"
+    assert tts._pool_for("Nord", False) == "if"       # ещё не обучен
+
+    # Незнакомая раса не должна ронять озвучку.
+    assert tts._pool_for("Sload", True) in tts.voices
+
+
 def t_voice_pitch_matches_the_race():
     """Голос NPC должен попадать в высоту своей расы.
 
@@ -881,14 +919,24 @@ def t_voice_pitch_matches_the_race():
     выше. А босмеров отправляли в пул данмеров, и Фаргот получал 80 вместо
     171 — промах больше чем в два раза.
     """
-    from tts_morrowind import POOL_HZ, RACE_TO_POOL
+    from tts_morrowind import POOL_HZ, MorrowindTTS
     from tts_queue import RACE_HZ, _RACE_ALIAS, pitch_for, race_pitch
+
+    # Проверяем ТОТ пул, который реально прозвучит, а не тот, что записан в
+    # таблице: у восьми рас свой голос ещё не обучен, и подставляется
+    # ближайший. Именно его высоту и надо подгонять.
+    tts = MorrowindTTS.__new__(MorrowindTTS)
+    tts.voices = sorted(POOL_HZ)
+
+    # У каждого пула, который может прозвучать, высота должна быть ЗАМЕРЕНА:
+    # без неё поправка по расе не считается, и голос остаётся чужим.
+    for pool in tts.voices:
+        assert POOL_HZ.get(pool), f"пул {pool} загружен, но высота не замерена"
 
     worst = 0.0
     for (race, male), want in RACE_HZ.items():
-        pool = RACE_TO_POOL.get(race, "d") + ("m" if male else "f")
-        base = POOL_HZ.get(pool)
-        assert base, f"{race}: пул {pool} без замеренной высоты"
+        pool = tts._pool_for(race, male)
+        base = POOL_HZ[pool]
         # Берём самую неудачную личную высоту — даже она не должна уводить
         # голос из своей расы.
         for nid in ("a", "b", "c", "d", "e", "f", "g", "h"):
@@ -2648,6 +2696,7 @@ def main() -> int:
             t_gesture_belongs_to_this_person, t_scene_actions_never_hit_the_player,
             t_no_npc_is_frozen_for_days, t_fate_roles_match_between_python_and_lua,
             t_voice_pitch_matches_the_race,
+            t_each_race_gets_its_own_voice_when_trained,
             t_finished_quests_are_not_forgotten,
             t_companion_relationship_can_still_move,
             t_theft_accuses_once_per_incident,
