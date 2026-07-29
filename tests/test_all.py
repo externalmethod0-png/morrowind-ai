@@ -1502,7 +1502,18 @@ def t_trained_voices_are_wired_in():
     if not voices.is_dir():
         return "skip"
     have = sorted(p.stem.split("-")[-1] for p in voices.glob("ru_RU-morrowind-*.onnx"))
-    assert have == ["df", "dm", "if", "im"], f"обучены не все голоса: {have}"
+    # Голосов становится больше: в игре двадцать пулов, обучаются по очереди.
+    # Поэтому перечислять их списком нельзя — тест ломался бы от каждого
+    # нового. Правило другое: четыре основных обязательны (на них держится
+    # подстановка для необученных рас), а КАЖДЫЙ установленный голос должен
+    # быть исправен и иметь замеренную высоту.
+    for must in ("dm", "df", "im", "if"):
+        assert must in have, f"нет основного голоса {must}: {have}"
+    from tts_morrowind import POOL_HZ
+    for pool in have:
+        assert POOL_HZ.get(pool), (
+            f"голос {pool} установлен, но высота не замерена — "
+            "поправка по расе не посчитается (tools/measure_pool_hz.py)")
     for pool in have:
         cfg = voices / f"ru_RU-morrowind-{pool}.onnx.json"
         assert cfg.exists(), f"{pool}: нет конфига — голос не заговорит"

@@ -97,12 +97,19 @@ def export(pool: str) -> bool:
 
 
 def main() -> int:
-    print(f"экспорт в {OUT}\n")
-    ok = {p: export(p) for p in POOLS}
+    # Пулы можно назвать списком. Обучение идёт очередью, и экспортировать
+    # НЕДОУЧЕННЫЙ чекпоинт нельзя: в игру уедет полуфабрикат, а звучать он
+    # будет как сломанный голос, а не как недоученный.
+    want = [a for a in sys.argv[1:] if a in POOLS] or list(POOLS)
+    skipped = [a for a in sys.argv[1:] if a not in POOLS]
+    if skipped:
+        print(f"неизвестные пулы пропущены: {', '.join(skipped)}")
+    print(f"экспорт в {OUT}: {', '.join(want)}\n")
+    ok = {pool: export(pool) for pool in want}
     print()
-    good = [p for p, v in ok.items() if v]
-    print(f"готово голосов: {len(good)} из {len(POOLS)}")
-    return 0 if len(good) == len(POOLS) else 1
+    good = [pool for pool, v in ok.items() if v]
+    print(f"готово голосов: {len(good)} из {len(want)}")
+    return 0 if len(good) == len(want) else 1
 
 
 if __name__ == "__main__":
