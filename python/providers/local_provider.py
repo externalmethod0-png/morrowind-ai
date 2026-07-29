@@ -49,13 +49,27 @@ class LocalProvider(LLMProvider):
         self.base_url: str = str(cfg.get("base_url") or DEFAULT_URL).rstrip("/")
         self.model_name: str = str(cfg.get("model") or "")
         self.timeout: float = float(cfg.get("timeout") or 90)
+        # НОМЕР СЛОТА у llama-server. Слот — это отдельная ячейка памяти, где
+        # сервер держит разбор промпта. Записок у мода две (разговор с NPC и
+        # сценка между NPC), и общего начала у них НОЛЬ знаков — поэтому на
+        # одном слоте каждая сценка вытирала разбор разговорной записки, и
+        # следующая реплика игрока читала правила заново.
+        #
+        # Замерено на гигачате, шесть реплик с разными NPC и сценкой между:
+        #     один слот   13.4 с на реплику
+        #     два слота    2.7 с
+        # Разница пятикратная и никакими другими настройками не берётся.
+        # LM Studio так не умеет — нужен llama-server с -np 2.
+        slot = cfg.get("slot")
+        self.slot: int | None = int(slot) if slot is not None else None
         self._fallback_cfg: dict | None = cfg.get("fallback") or None
         self._fallback: LLMProvider | None = None
         self._local_dead_until: float = 0.0
 
         if not self.model_name:
             self.model_name = self._first_available_model() or "local"
-        logger.info("LocalProvider: %s, модель=%s%s", self.base_url, self.model_name,
+        logger.info("LocalProvider: %s, модель=%s%s%s", self.base_url, self.model_name,
+                    f", слот {self.slot}" if self.slot is not None else "",
                     ", запасной: " + str((self._fallback_cfg or {}).get("provider"))
                     if self._fallback_cfg else ", без запасного")
 
@@ -187,6 +201,7 @@ class LocalProvider(LLMProvider):
             # нет, он давит только повтор.
             "presence_penalty": float(kwargs.get("presence_penalty", 0.0)),
             "frequency_penalty": float(kwargs.get("frequency_penalty", 0.0)),
+            **({"id_slot": self.slot} if self.slot is not None else {}),
             "stream": True,
         }
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -234,6 +249,7 @@ class LocalProvider(LLMProvider):
             "temperature": float(kwargs.get("temperature", 0.8)),
             "presence_penalty": float(kwargs.get("presence_penalty", 0.0)),
             "frequency_penalty": float(kwargs.get("frequency_penalty", 0.0)),
+            **({"id_slot": self.slot} if self.slot is not None else {}),
             "max_tokens": int(kwargs.get("max_tokens", 400)),
             "stream": False,
         }

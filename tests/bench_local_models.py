@@ -156,7 +156,14 @@ async def run_model(model: str, raw_log: list, rounds: int = 1) -> dict:
         la._bench_spy = True
 
     agent = LoreAgent.__new__(LoreAgent)
-    agent.llm = LocalProvider({"base_url": BASE_URL, "model": model, "timeout": 180})
+    # Стенд писался под домашний сервер, но сравнивать профили промпта нужно и
+    # на облаке: сжатая инструкция делалась для мелких моделей, и вопрос, не
+    # сушит ли она речь большой, решается только замером.
+    if os.environ.get("MWAI_BENCH_PROVIDER", "local") == "gemini":
+        from providers.factory import get_provider
+        agent.llm = get_provider({"provider": "gemini", "model": model})
+    else:
+        agent.llm = LocalProvider({"base_url": BASE_URL, "model": model, "timeout": 180})
     # Температура задаётся снаружи: замеры показали разброс между прогонами
     # больше, чем разница от правок промпта (17-19-18-20-18 при одинаковых
     # условиях). Для соблюдения формата нужна низкая температура.

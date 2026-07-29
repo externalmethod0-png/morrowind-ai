@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import os
 import sys
 from pathlib import Path
@@ -371,6 +372,36 @@ def main() -> None:
                      where.upper(), mic or "по умолчанию")
         except Exception as exc:  # noqa: BLE001
             log.warning("Voice mode disabled: %s", exc)
+
+    # ПРОГРЕВ ДОМАШНЕЙ МОДЕЛИ. Первая реплика за сеанс стоит вшестеро дороже
+    # остальных: модель разбирает неизменную часть промпта — правила мира и
+    # список команд — и только потом отвечает. Замерено на гигачате: 28.8 с
+    # первый запрос против 3.5 с следующего, разница в восемь раз.
+    #
+    # В игре это выглядело как «первый NPC думает почти минуту». Мост
+    # запускается РАНЬШЕ игры, так что пусть он это время и потратит: пока
+    # человек грузит сохранение, модель уже прочла правила.
+    #
+    # Только для СВОЕЙ модели. Облаку прогрев ничего не ускоряет, а запрос
+    # стоил бы денег на пустом месте.
+    if str((cfg.get("models", {}).get("lore_agent", {}) or {})
+           .get("provider", "")).lower() in ("local", "ollama", "llamacpp", "lmstudio"):
+        async def _warm() -> None:
+            await lore.generate_response({
+                "npc_name": "Прохожий", "npc_race": "Dunmer",
+                "npc_class": "Commoner", "npc_disposition": 50,
+                "player_input": "Здравствуй.", "conversation_history": [],
+            }, [])
+
+        try:
+            t0 = time.time()
+            log.info("прогреваю модель — читает правила, чтобы первый NPC не ждал")
+            asyncio.run(_warm())
+            log.info("модель прогрета за %.1f с", time.time() - t0)
+        except Exception as exc:  # noqa: BLE001
+            # Не беда: прогрев — ускорение, а не условие работы.
+            log.warning("прогрев не удался (%s) — играть можно, первая реплика "
+                        "будет дольше", exc)
 
     log.info("Bridge ready. Launch OpenMW and press H near an NPC. Ctrl+C to stop.")
     try:

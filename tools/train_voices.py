@@ -68,6 +68,23 @@ def train_one(pool: str, steps: int, dry: bool = False) -> bool:
     base_step = checkpoint_step(ckpt)
     target = base_step + steps
 
+    # ПРОДОЛЖЕНИЕ, А НЕ НАЧАЛО ЗАНОВО. Скрипт всегда стартовал с базового
+    # чекпоинта — а если обучение уже шло и было прервано, это выбрасывает всю
+    # проделанную работу молча, и со стороны выглядит как «просто медленно
+    # учится». Цель по шагам считается от БАЗЫ, поэтому продолжение с середины
+    # доводит до того же места, а не уезжает дальше.
+    resumed = sorted(out.rglob("checkpoints/last.ckpt"))
+    if resumed:
+        latest = max(resumed, key=lambda f: checkpoint_step(f))
+        done = checkpoint_step(latest)
+        if done >= target:
+            print(f"[{pool}] уже обучен: шаг {done} >= цель {target}")
+            return True
+        if done > base_step:
+            print(f"[{pool}] продолжаю с шага {done} "
+                  f"(вместо старта с {base_step})")
+            ckpt = latest
+
     cmd = [
         str(PY), "-m", "piper.train", "fit",
         "--data.csv_path", str(csv_path),

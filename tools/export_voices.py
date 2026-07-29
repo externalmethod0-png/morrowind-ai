@@ -33,11 +33,27 @@ POOLS = {
 
 
 def newest_checkpoint(pool: str) -> Path | None:
-    """Берём last.ckpt — он на самом дальнем шаге обучения."""
+    """Чекпоинт на САМОМ ДАЛЬНЕМ шаге обучения.
+
+    Раньше выбирали по времени файла. Пока обучение шло одним заходом, это
+    совпадало — но оно обрывалось дважды, и last.ckpt стало четыре штуки в
+    разных version_N. Время правки — признак ненадёжный: достаточно тронуть
+    старый файл, и в игру уехал бы недоученный голос, причём молча.
+    Спрашиваем сам чекпоинт, на каком он шаге.
+    """
     files = glob.glob(str(RUNS / pool / "**" / "last.ckpt"), recursive=True)
     if not files:
         return None
-    return Path(max(files, key=os.path.getmtime))
+
+    def step(path: str) -> tuple[int, float]:
+        try:
+            import torch
+            ck = torch.load(path, map_location="cpu", weights_only=False)
+            return int(ck.get("global_step", 0)), os.path.getmtime(path)
+        except Exception:  # noqa: BLE001
+            return 0, os.path.getmtime(path)
+
+    return Path(max(files, key=step))
 
 
 def export(pool: str) -> bool:
