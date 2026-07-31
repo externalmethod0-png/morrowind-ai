@@ -91,7 +91,7 @@ POOL_HZ = {"dm": 84.2, "im": 135.7, "df": 162.5, "if": 183.4,
            #
            # Переснимать после каждого дообучения: tools/measure_pool_hz.py
            "am": 79.8, "af": 185.3, "km": 119.7, "kf": 166.4,
-           "nm": 148.6, "nf": 178.9}
+           "nm": 148.6, "nf": 178.9, "bm": 168.7}
 
 
 class MorrowindTTS(SerialSpeaker):
